@@ -55,5 +55,5 @@ The JAR should be written to `build/libs/Geode-0.1.0.jar`.
 
 - Chest detection is limited to tile entities in chunks currently loaded by the client. Geode patrols nearby waypoints to load more chunks; it cannot inspect unloaded chunks remotely.
 - The chat announcement contains no chest coordinates.
-- The iron-bar detector searches within three blocks horizontally and two blocks vertically of the supplied approximate gate coordinate. If the real hole is outside that region or the grate is not made of vanilla iron bars, the HUD will report that no framed opening was detected.
+- The iron-bar detector searches within four blocks horizontally and scans down from the player's current feet layer through the configured maximum fall distance. It accepts staggered bars around the shaft and requires a clear two-block player column and a safe landing below. If the hole is outside the search region or the grate is not made of vanilla iron bars, the HUD reports scan counts.
 - The runtime grate-crossing check and the actual movement through the opening still need validation in the running remake world.
