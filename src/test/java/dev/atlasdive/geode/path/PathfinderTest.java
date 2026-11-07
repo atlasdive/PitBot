@@ -297,6 +297,66 @@ public class PathfinderTest {
         @Override public boolean lineClear(PathNode a,PathNode b){return a.y2==b.y2;}
     }
 
+    @Test public void choosesAnActuallySupportedSideLaneInsteadOfUnsupportedCellCenter(){
+        LaneWorld world=new LaneWorld();
+        PathNode start=new PathNode(0,2,0,PathNode.CENTER);
+        PathNode stairLane=new PathNode(1,2,0,PathNode.EAST);
+        PathNode goal=new PathNode(2,2,0,PathNode.CENTER);
+        world.stands.add(start);world.stands.add(stairLane);world.stands.add(goal);
+        PathResult result=new Pathfinder().findNodes(world,start,
+                java.util.Collections.singletonList(goal),1000,8);
+        assertTrue(result.found());
+        assertTrue("path must use the supported side of the stair, not its unsupported centre",
+                result.steps.stream().anyMatch(step->step.node.equals(stairLane)));
+        assertEquals(goal,result.steps.get(result.steps.size()-1).node);
+    }
+
+    @Test public void canPathThroughWaterAndContinueToDryGround(){
+        WaterWorld world=new WaterWorld();
+        PathNode start=new PathNode(0,2,0);
+        PathNode water=new PathNode(1,2,0);
+        PathNode shore=new PathNode(2,2,0);
+        world.stands.add(start);world.stands.add(water);world.stands.add(shore);
+        world.wet.add(start);world.wet.add(water);
+        PathResult result=new Pathfinder().findNodes(world,start,
+                java.util.Collections.singletonList(shore),1000,8);
+        assertTrue("water cells must be valid path nodes",result.found());
+        assertTrue("the water segment should be marked for swimming",
+                result.steps.stream().anyMatch(step->step.node.equals(water)&&step.kind==MovementKind.SWIM));
+        assertEquals(shore,result.steps.get(result.steps.size()-1).node);
+    }
+
+    @Test public void pathNodeKeepsItsActualHorizontalLane(){
+        PathNode node=new PathNode(10,133,20,PathNode.WEST);
+        assertEquals(10.15D,node.worldX(),0.0001D);
+        assertEquals(20.5D,node.worldZ(),0.0001D);
+        assertEquals(PathNode.WEST,PathNode.atPlayer(node.worldX(),66.5D,node.worldZ()).lane);
+    }
+
+    private static final class LaneWorld extends TestWorld {
+        final Set<PathNode> stands=new HashSet<PathNode>();
+        @Override public boolean canStand(PathNode p){return stands.contains(p);}
+        @Override public boolean clear(PathNode p){return true;}
+        @Override public boolean hazard(PathNode p){return false;}
+        @Override public double extraCost(PathNode p){return 0D;}
+        @Override public boolean jumpArcClear(PathNode a,PathNode b){return false;}
+        @Override public boolean transitionClear(PathNode a,PathNode b){return true;}
+        @Override public boolean lineClear(PathNode a,PathNode b){return a.y2==b.y2&&a.lane==b.lane;}
+    }
+
+    private static final class WaterWorld extends TestWorld {
+        final Set<PathNode> stands=new HashSet<PathNode>();
+        final Set<PathNode> wet=new HashSet<PathNode>();
+        @Override public boolean canStand(PathNode p){return stands.contains(p);}
+        @Override public boolean clear(PathNode p){return true;}
+        @Override public boolean hazard(PathNode p){return false;}
+        @Override public boolean liquid(PathNode p){return wet.contains(p);}
+        @Override public double extraCost(PathNode p){return 0D;}
+        @Override public boolean jumpArcClear(PathNode a,PathNode b){return false;}
+        @Override public boolean transitionClear(PathNode a,PathNode b){return true;}
+        @Override public boolean lineClear(PathNode a,PathNode b){return a.y2==b.y2&&a.lane==b.lane;}
+    }
+
     private static class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         final Set<BlockPos> iron=new HashSet<BlockPos>();

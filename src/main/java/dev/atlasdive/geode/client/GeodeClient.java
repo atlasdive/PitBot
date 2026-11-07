@@ -30,7 +30,7 @@ import java.util.concurrent.*;
 public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
-    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT }
+    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
@@ -53,7 +53,8 @@ public final class GeodeClient {
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
-    private int loadedChestTiles,excludedChestTiles;
+    private int loadedChestTiles,excludedChestTiles,waterRecoveryRadius=8;
+    private Stage waterResumeStage=Stage.SEEK;
     private boolean patrolTransit;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
@@ -72,7 +73,7 @@ public final class GeodeClient {
         collectResult(p);
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         switch(stage){
-            case TO_LAUNCH:case TO_GATE:case TO_CHEST:case TO_SCAFFOLD:case PATROL:tickRoute(p,w);break;
+            case TO_LAUNCH:case TO_GATE:case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:tickRoute(p,w);break;
             case BUILD_SCAFFOLD:tickScaffold(p,w);break;
             case ENTER_GATE:tickGateEntry(p);break;
             case WAIT_GATE_LANDING:movement.stop();tickGateLanding(p,w);break;
@@ -135,8 +136,8 @@ public final class GeodeClient {
             else if(b.kind==MovementKind.JUMP||b.kind==MovementKind.STEP_UP)GL11.glColor4f(0.95F,0.85F,0.20F,0.95F);
             else GL11.glColor4f(0.20F,0.85F,1.0F,0.90F);
             GL11.glBegin(GL11.GL_LINES);
-            GL11.glVertex3d(a.pos.x+0.5D-rm.viewerPosX,a.feetY+0.08D-rm.viewerPosY,a.pos.z+0.5D-rm.viewerPosZ);
-            GL11.glVertex3d(b.pos.x+0.5D-rm.viewerPosX,b.feetY+0.08D-rm.viewerPosY,b.pos.z+0.5D-rm.viewerPosZ);
+            GL11.glVertex3d(a.targetX-rm.viewerPosX,a.feetY+0.08D-rm.viewerPosY,a.targetZ-rm.viewerPosZ);
+            GL11.glVertex3d(b.targetX-rm.viewerPosX,b.feetY+0.08D-rm.viewerPosY,b.targetZ-rm.viewerPosZ);
             GL11.glEnd();
         }
         GL11.glDepthMask(true);
@@ -151,6 +152,7 @@ public final class GeodeClient {
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
         cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
+        waterRecoveryRadius=8;waterResumeStage=Stage.SEEK;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
         failedGateApproaches.clear();resetGateState();
@@ -178,7 +180,12 @@ public final class GeodeClient {
         movement.tick(p);
         if(movement.stuck()){
             movement.stop();
-            if(stage==Stage.PATROL){
+            if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
+                beginWaterRecovery(p,w);
+            }else if(stage==Stage.WATER_RECOVERY){
+                waterRecoveryRadius=Math.min(16,waterRecoveryRadius+4);
+                routeWaterRecovery(p,w);
+            }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("Patrol waypoint blocked; advancing to the next spiral point");
             }else if(stage==Stage.TO_SCAFFOLD){
                 failScaffold(p,w,"Could not reach the scaffold staging position");
@@ -224,10 +231,23 @@ public final class GeodeClient {
                 stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
                 status="Patrol point reached; scanning the newly loaded area";
             }
+        }else if(stage==Stage.WATER_RECOVERY){
+            if(waterResumeStage==Stage.TO_CHEST&&chest!=null){
+                stage=Stage.TO_CHEST;routeChest(p,w,chest);
+            }else if(waterResumeStage==Stage.TO_SCAFFOLD&&chest!=null){
+                stage=Stage.TO_SCAFFOLD;routeScaffoldStaging(p,w);
+            }else if(waterResumeStage==Stage.PATROL){
+                stage=Stage.PATROL;routePatrol(p,w);
+            }else{
+                stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+                status="Escaped water; resuming chest search";
+                findChest(p,w);
+            }
         }
     }
     private void reRoute(EntityPlayerSP p,World w){
-        if(stage==Stage.TO_LAUNCH)routeLaunch(p,w);
+        if(stage==Stage.WATER_RECOVERY)routeWaterRecovery(p,w);
+        else if(stage==Stage.TO_LAUNCH)routeLaunch(p,w);
         else if(stage==Stage.TO_GATE)routeGate(p,w);
         else if(stage==Stage.TO_CHEST&&chest!=null)routeChest(p,w,chest);
         else if(stage==Stage.TO_SCAFFOLD&&chest!=null)routeScaffoldStaging(p,w);
@@ -304,10 +324,41 @@ public final class GeodeClient {
             status="12 patrol waypoints were unreachable; pausing briefly before continuing the unbounded spiral";
         }
     }
+    private void beginWaterRecovery(EntityPlayerSP p,World w){
+        waterResumeStage=stage;
+        waterRecoveryRadius=8;
+        stage=Stage.WATER_RECOVERY;
+        status="Stuck in water; finding a dry escape route";
+        routeWaterRecovery(p,w);
+    }
+
+    private void routeWaterRecovery(EntityPlayerSP p,World w){
+        int x=MathHelper.floor_double(p.posX);
+        int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+        int z=MathHelper.floor_double(p.posZ);
+        List<BlockPos> dryCandidates=box(x-waterRecoveryRadius,x+waterRecoveryRadius,
+                y-4,y+5,z-waterRecoveryRadius,z+waterRecoveryRadius);
+        status="Searching for dry footing (radius "+waterRecoveryRadius+")";
+        route(p,w,dryCandidates,"Water escape");
+    }
+
+    private void addGoalVariants(MinecraftPathWorld snap,List<PathNode> pathGoals,
+                                 BlockPos pos,boolean requireDry){
+        for(int half=0;half<=1;half++){
+            int y2=pos.y*2+half;
+            for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
+                PathNode candidate=new PathNode(pos.x,y2,pos.z,lane);
+                if(!snap.canStand(candidate))continue;
+                if(requireDry&&snap.liquid(candidate))continue;
+                pathGoals.add(candidate);
+            }
+        }
+    }
+
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
         if(future!=null)future.cancel(true);movement.stop();
         BlockPos start=playerPos(p);
-        PathNode startNode=PathNode.atFeet(start.x,p.getEntityBoundingBox().minY,start.z);
+        PathNode startNode=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
         lastStart=start;
         List<PathNode> captureGoals=new ArrayList<PathNode>();
         for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
@@ -332,14 +383,17 @@ public final class GeodeClient {
             gateColumns.clear();gateColumns.addAll(plan.columns);
             gateApproachMap.clear();gateApproachMap.putAll(plan.approachToAperture);
             for(BlockPos approach:plan.approaches){
-                if(!failedGateApproaches.contains(approach)&&snap.canStand(approach)){
-                    goals.add(approach);pathGoals.add(PathNode.fromBlockPos(approach));
-                }
+                if(failedGateApproaches.contains(approach))continue;
+                int before=pathGoals.size();
+                addGoalVariants(snap,pathGoals,approach,false);
+                if(pathGoals.size()>before)goals.add(approach);
             }
-            if(goals.isEmpty()){
+            if(pathGoals.isEmpty()){
                 failedGateApproaches.clear();
-                for(BlockPos approach:plan.approaches)if(snap.canStand(approach)){
-                    goals.add(approach);pathGoals.add(PathNode.fromBlockPos(approach));
+                for(BlockPos approach:plan.approaches){
+                    int before=pathGoals.size();
+                    addGoalVariants(snap,pathGoals,approach,false);
+                    if(pathGoals.size()>before)goals.add(approach);
                 }
             }
             goalCandidates=pathGoals.size();
@@ -353,23 +407,30 @@ public final class GeodeClient {
                     // patrol destination; that creates zero-distance patrol loops.
                     if(dx*dx+dz*dz<25L)continue;
                 }
-                if(snap.canStand(g)){goals.add(g);pathGoals.add(PathNode.fromBlockPos(g));}
-                PathNode halfLevel=new PathNode(g.x,g.y*2+1,g.z);
-                if(snap.canStand(halfLevel)){goals.add(halfLevel.blockPos());pathGoals.add(halfLevel);}
+                int before=pathGoals.size();
+                addGoalVariants(snap,pathGoals,g,"Water escape".equals(why));
+                if(pathGoals.size()>before)goals.add(g);
             }
         }
         if(goals.isEmpty()&&"LaunchPad".equals(why)){
             for(int x=LAUNCH.x-1;x<=LAUNCH.x+1;x++)for(int y=LAUNCH.y-1;y<=LAUNCH.y+2;y++)
                 for(int z=LAUNCH.z-1;z<=LAUNCH.z+1;z++){
                     BlockPos g=new BlockPos(x,y,z);
-                    if(snap.canStand(g)){goals.add(g);pathGoals.add(PathNode.fromBlockPos(g));}
-                    PathNode halfLevel=new PathNode(x,y*2+1,z);
-                    if(snap.canStand(halfLevel)){goals.add(halfLevel.blockPos());pathGoals.add(halfLevel);}
+                    int before=pathGoals.size();
+                    addGoalVariants(snap,pathGoals,g,false);
+                    if(pathGoals.size()>before)goals.add(g);
                 }
         }
         goalCandidates=pathGoals.size();
-        if(goals.isEmpty()){
-            if("Sewer patrol".equals(why)){
+        if(pathGoals.isEmpty()){
+            if(p.isInWater()&&!"Water escape".equals(why)){
+                beginWaterRecovery(p,w);
+                return;
+            }else if("Water escape".equals(why)){
+                waterRecoveryRadius=Math.min(16,waterRecoveryRadius+4);
+                status="No dry route in loaded chunks; expanding water escape search";
+                retryTicks=ticks+20;
+            }else if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("No loaded standable cells at this patrol waypoint");
             }else if("chest scaffold staging".equals(why)&&chest!=null){
                 failScaffold(p,w,"Scaffold staging position is not reachable");
@@ -426,6 +487,8 @@ public final class GeodeClient {
                     status=purpose+" path ready ("+r.steps.size()+" steps)";
                 }
                 movement.setPath(r.steps,p);
+            }else if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
+                beginWaterRecovery(p,mc.theWorld);
             }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("No path to patrol waypoint ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_SCAFFOLD&&chest!=null){
@@ -435,6 +498,10 @@ public final class GeodeClient {
                 status="No route to chest "+chest+" ("+r.expanded+" nodes); trying another chest";
                 chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
                 retryTicks=ticks+5;
+            }else if(stage==Stage.WATER_RECOVERY){
+                waterRecoveryRadius=Math.min(16,waterRecoveryRadius+4);
+                status="No dry escape path yet; expanding to radius "+waterRecoveryRadius;
+                retryTicks=ticks+20;
             }else{
                 status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";
                 retryTicks=ticks+40;

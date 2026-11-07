@@ -8,17 +8,12 @@ import net.minecraft.util.MathHelper;
 import java.util.Collections;
 import java.util.List;
 
-/**
- * Stable waypoint follower for vanilla 1.8.9 movement.
- *
- * It stops walking while making large turns, uses generous waypoint capture,
- * and detects lack of progress toward the current target (not merely lack of motion).
- */
+/** Follows collision-tested sub-cell waypoints and handles land, stairs, ladders and water. */
 public final class MovementController {
-    private static final double WAYPOINT_RADIUS=0.58D;
+    private static final double WAYPOINT_RADIUS=0.52D;
     private static final double DROP_ALIGNMENT=0.16D;
-    private static final float TURN_RATE=10.0F;
-    private static final float WALK_ALIGNMENT=32.0F;
+    private static final float TURN_RATE=8.0F;
+    private static final float WALK_ALIGNMENT=58.0F;
     private List<PathStep> path=Collections.emptyList();
     private int index,probeTicks,noProgressTicks,trackedIndex=-1;
     private double lastProbeDistance=Double.POSITIVE_INFINITY;
@@ -40,124 +35,88 @@ public final class MovementController {
     public void tick(EntityPlayerSP player){
         if(player==null||!hasPath()||complete()){release();return;}
         if(stuck){release();return;}
-
         double feet=player.getEntityBoundingBox().minY;
         PathStep step;
         double dx,dz,distance,vertical;
-
-        // Consume already reached nodes before choosing the next movement input.
         while(index<path.size()){
             step=path.get(index);
-            dx=step.pos.x+.5D-player.posX;
-            dz=step.pos.z+.5D-player.posZ;
-            distance=Math.sqrt(dx*dx+dz*dz);
-            vertical=step.feetY-feet;
-
-            if(step.kind==MovementKind.DROP){
-                if(distance<=DROP_ALIGNMENT){
-                    // Do not keep walking while gravity carries the player through the opening.
-                    releaseForwardAndJump();
-                    if(feet<=step.feetY+.45D&&player.onGround){
-                        advance();
-                        continue;
-                    }
-                    trackProgress(distance);
-                    return;
-                }
-                break;
+            dx=step.targetX-player.posX;dz=step.targetZ-player.posZ;
+            distance=Math.sqrt(dx*dx+dz*dz);vertical=step.feetY-feet;
+            double metric=Math.sqrt(distance*distance+vertical*vertical);
+            if(step.kind==MovementKind.DROP&&distance<=DROP_ALIGNMENT){
+                releaseForwardAndJump();
+                if(feet<=step.feetY+0.45D&&player.onGround){advance();continue;}
+                trackProgress(metric);return;
             }
-            if(step.kind==MovementKind.CLIMB){
-                if(distance<=.65D&&Math.abs(vertical)>.45D){
-                    setForward(true);
-                    setJump(false);
-                    setSneak(vertical<-.35D);
-                    trackProgress(distance);
-                    return;
-                }
-            }else if(step.kind==MovementKind.SWIM){
-                if(distance<=.65D&&Math.abs(vertical)>.45D){
-                    setForward(false);
-                    setJump(vertical>.35D);
-                    setSneak(vertical<-.35D);
-                    trackProgress(distance);
-                    return;
-                }
+            if(step.kind==MovementKind.SWIM){
+                steer(player,dx,dz);
+                float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+                boolean aligned=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw))<=95.0F;
+                setForward(aligned);setJump(vertical>0.12D);setSneak(vertical< -0.12D);
+                setSprint(false);trackProgress(metric);return;
             }
-
-            if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<.35D){
-                advance();
-                continue;
+            if(step.kind==MovementKind.CLIMB&&distance<=0.72D&&Math.abs(vertical)>0.25D){
+                setForward(true);setJump(false);setSneak(vertical< -0.20D);
+                setSprint(false);trackProgress(metric);return;
             }
+            if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<0.34D){advance();continue;}
             break;
         }
-
         if(index>=path.size()){release();return;}
         step=path.get(index);
-        dx=step.pos.x+.5D-player.posX;
-        dz=step.pos.z+.5D-player.posZ;
-        distance=Math.sqrt(dx*dx+dz*dz);
-        vertical=step.feetY-feet;
-
-        if(distance>.08D){
+        dx=step.targetX-player.posX;dz=step.targetZ-player.posZ;
+        distance=Math.sqrt(dx*dx+dz*dz);vertical=step.feetY-feet;
+        double metric=Math.sqrt(distance*distance+vertical*vertical);
+        if(distance>0.06D){
             float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
             float difference=MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw);
             player.rotationYaw+=MathHelper.clamp_float(difference,-TURN_RATE,TURN_RATE);
-
-            // Turning on the spot prevents the player from orbiting around short waypoints.
             if(Math.abs(difference)>WALK_ALIGNMENT){
-                setForward(false);
-                setJump(false);
+                setForward(false);setJump(false);setSprint(false);
             }else{
-                setForward(true);
-                boolean jump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)||step.kind==MovementKind.JUMP)
-                        &&player.onGround&&distance<2.5D;
+                setForward(true);setSprint(step.kind!=MovementKind.CLIMB);
+                boolean jump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
+                        ||step.kind==MovementKind.JUMP)&&player.onGround&&distance<2.5D;
                 setJump(jump);
             }
-        }else{
-            setForward(false);
-            setJump(false);
-        }
-        setSneak(false);
-        trackProgress(distance);
+        }else{setForward(false);setJump(false);setSprint(false);}
+        setSneak(false);trackProgress(metric);
     }
 
+    private void steer(EntityPlayerSP player,double dx,double dz){
+        if(Math.sqrt(dx*dx+dz*dz)<0.04D)return;
+        float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+        float difference=MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw);
+        player.rotationYaw+=MathHelper.clamp_float(difference,-TURN_RATE,TURN_RATE);
+    }
     private void advance(){
-        index++;
-        probeTicks=0;noProgressTicks=0;trackedIndex=-1;
+        index++;probeTicks=0;noProgressTicks=0;trackedIndex=-1;
         lastProbeDistance=Double.POSITIVE_INFINITY;
     }
-
-    private void trackProgress(double distance){
-        if(trackedIndex!=index){
-            trackedIndex=index;
-            lastProbeDistance=distance;
-            probeTicks=0;
-            noProgressTicks=0;
-            return;
-        }
+    private void trackProgress(double metric){
+        if(trackedIndex!=index){trackedIndex=index;lastProbeDistance=metric;probeTicks=0;noProgressTicks=0;return;}
         if(++probeTicks<20)return;
         probeTicks=0;
-        // Movement can occur in circles. Only reduction in distance to the waypoint counts.
-        if(distance>.75D&&lastProbeDistance-distance<.12D)noProgressTicks+=20;
+        if(metric>0.60D&&lastProbeDistance-metric<0.10D)noProgressTicks+=20;
         else noProgressTicks=0;
-        lastProbeDistance=distance;
-        if(noProgressTicks>=60)stuck=true;
+        lastProbeDistance=metric;
+        if(noProgressTicks>=80)stuck=true;
     }
-
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
-        probeTicks=0;noProgressTicks=0;trackedIndex=-1;
-        lastProbeDistance=Double.POSITIVE_INFINITY;
+        probeTicks=0;noProgressTicks=0;trackedIndex=-1;lastProbeDistance=Double.POSITIVE_INFINITY;
     }
-    private void releaseForwardAndJump(){setForward(false);setJump(false);setSneak(false);}
+    private void releaseForwardAndJump(){setForward(false);setJump(false);setSneak(false);setSprint(false);}
     private void setForward(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindForward,v);}
     private void setJump(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindJump,v);}
     private void setSneak(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindSneak,v);}
+    private void setSprint(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindSprint,v);}
     private void key(KeyBinding binding,boolean v){KeyBinding.setKeyBindState(binding.getKeyCode(),v);}
     private void release(){
         Minecraft m=Minecraft.getMinecraft();if(m==null)return;
         key(m.gameSettings.keyBindForward,false);key(m.gameSettings.keyBindBack,false);
         key(m.gameSettings.keyBindLeft,false);key(m.gameSettings.keyBindRight,false);
         key(m.gameSettings.keyBindJump,false);key(m.gameSettings.keyBindSneak,false);
+        key(m.gameSettings.keyBindSprint,false);
     }
 }
