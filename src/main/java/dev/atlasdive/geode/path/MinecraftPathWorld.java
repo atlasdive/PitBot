@@ -79,7 +79,9 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean ironBars=b==Blocks.iron_bars;
             int i=out.index(x,y,z);
             boolean occupy=!blocked[i];
-            boolean support=supported[i];
+            boolean support=supported[i]
+                    ||(world.isBlockLoaded(p.down(),false)
+                    &&world.isSideSolid(p.down(),EnumFacing.UP,false));
             byte f=0;
             if(occupy)f|=OCCUPY;
             if(support)f|=SUPPORT;
