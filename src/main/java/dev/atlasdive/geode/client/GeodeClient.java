@@ -41,7 +41,8 @@ public final class GeodeClient {
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,
-            patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks;
+            patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
+    private int loadedChestTiles,inRangeChestTiles,excludedChestTiles;
     private boolean patrolComplete;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
@@ -94,12 +95,14 @@ public final class GeodeClient {
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
         mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chest scan: loaded "+loadedChestTiles+" | in range "+inRangeChestTiles
+                +" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,73,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,73,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,84,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,84,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,95,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,95,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,106,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -145,6 +148,16 @@ public final class GeodeClient {
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
     }
     private void tickRoute(EntityPlayerSP p,World w){
+        if(stage==Stage.PATROL&&++patrolScanTicks>=GeodeConfig.scanIntervalTicks){
+            patrolScanTicks=0;
+            BlockPos discovered=findNearestLoadedChest(p,w);
+            if(discovered!=null){
+                emptyScans=0;chest=discovered;stage=Stage.TO_CHEST;
+                status="Chest found while patrolling: "+discovered;
+                movement.stop();routeChest(p,w,discovered);
+                return;
+            }
+        }
         if(future!=null){movement.stop();return;}
         if(!movement.hasPath()){if(ticks>=retryTicks)reRoute(p,w);return;}
         movement.tick(p);
@@ -201,8 +214,15 @@ public final class GeodeClient {
         route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
-        route(p,w,Arrays.asList(c.add(1,0,0),c.add(-1,0,0),c.add(0,0,1),c.add(0,0,-1),
-                c.add(1,-1,0),c.add(-1,-1,0),c.add(0,-1,1),c.add(0,-1,-1)),"chest "+c);
+        List<BlockPos> approaches=new ArrayList<BlockPos>();
+        // A chest may be on a ledge, at the bottom of a pit, or behind a partial
+        // block. Consider a wider ring and several standing heights around it.
+        for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
+            if(dx==0&&dz==0)continue;
+            if(dx*dx+dz*dz>9)continue;
+            for(int dy=-3;dy<=3;dy++)approaches.add(c.add(dx,dy,dz));
+        }
+        route(p,w,approaches,"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
         if(patrolComplete){
@@ -295,6 +315,11 @@ public final class GeodeClient {
         if(goals.isEmpty()){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("No loaded standable cells at this patrol waypoint");
+            }else if(why.startsWith("chest ")&&chest!=null){
+                cooldown.put(chest,w.getTotalWorldTime()+200L);
+                status="No safe approach cells for "+chest+"; skipping this chest";
+                chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+                retryTicks=ticks+5;
             }else{
                 status="No standable goal cells for "+why+" near "+(rough.isEmpty()?"target":rough.get(0));
                 retryTicks=ticks+40;
@@ -341,6 +366,11 @@ public final class GeodeClient {
                 movement.setPath(r.steps,p);
             }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("No path to patrol waypoint ("+r.expanded+" nodes)");
+            }else if(stage==Stage.TO_CHEST&&chest!=null){
+                cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
+                status="No route to chest "+chest+" ("+r.expanded+" nodes); trying another chest";
+                chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+                retryTicks=ticks+5;
             }else{
                 status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";
                 retryTicks=ticks+40;
@@ -348,21 +378,40 @@ public final class GeodeClient {
         }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
     }
     private void findChest(EntityPlayerSP p,World w){
-        BlockPos best=null;double bd=Double.POSITIVE_INFINITY;long now=w.getTotalWorldTime();
-        // Always scan loaded tile entities. The chat announcement is only an optional early trigger.
+        BlockPos best=findNearestLoadedChest(p,w);
+        if(best!=null){
+            emptyScans=0;chest=best;stage=Stage.TO_CHEST;
+            status="Chest found: "+best;
+            routeChest(p,w,best);
+        }else if(++emptyScans>=5){
+            emptyScans=0;stage=Stage.PATROL;patrolScanTicks=0;routePatrol(p,w);
+        }else status="No loaded Sewer chest; scanning again";
+    }
+
+    /** Searches only tile entities in chunks currently loaded by the client. */
+    private BlockPos findNearestLoadedChest(EntityPlayerSP p,World w){
+        BlockPos best=null;
+        double bestDistance=Double.POSITIVE_INFINITY;
+        long now=w.getTotalWorldTime();
+        loadedChestTiles=0;inRangeChestTiles=0;excludedChestTiles=0;
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
+            loadedChestTiles++;
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
-            // Ignore the explicitly excluded lobby/structure chest cuboid (inclusive bounds).
-            if(isExcludedChest(pos.getX(),pos.getY(),pos.getZ()))continue;
-            if(Math.abs(pos.getX()-GATE.x)>GeodeConfig.scanRadius||Math.abs(pos.getZ()-GATE.z)>GeodeConfig.scanRadius
-                    ||pos.getY()<GATE.y-28||pos.getY()>GATE.y+8)continue;
-            BlockPos c=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
-            Long until=cooldown.get(c);if(until!=null&&until>now)continue;
-            double d=c.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);if(d<bd){bd=d;best=c;}
+            if(isExcludedChest(pos.getX(),pos.getY(),pos.getZ())){
+                excludedChestTiles++;
+                continue;
+            }
+            if(Math.abs(pos.getX()-GATE.x)>GeodeConfig.scanRadius
+                    ||Math.abs(pos.getZ()-GATE.z)>GeodeConfig.scanRadius
+                    ||pos.getY()<GATE.y-48||pos.getY()>GATE.y+16)continue;
+            inRangeChestTiles++;
+            BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
+            Long until=cooldown.get(candidate);
+            if(until!=null&&until>now)continue;
+            double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
+            if(distance<bestDistance){bestDistance=distance;best=candidate;}
         }
-        if(best!=null){emptyScans=0;chest=best;stage=Stage.TO_CHEST;status="Chest found: "+best;routeChest(p,w,best);}
-        else if(++emptyScans>=5){emptyScans=0;stage=Stage.PATROL;routePatrol(p,w);}
-        else status="No loaded Sewer chest; scanning again";
+        return best;
     }
     private boolean isExcludedChest(int x,int y,int z){
         return x>=19&&x<=23&&y>=66&&y<=70&&z>=72&&z<=82;
