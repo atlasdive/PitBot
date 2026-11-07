@@ -217,6 +217,19 @@ public class PathfinderTest {
         assertNull("once within 56 blocks, use final chest approach candidates",finalLeg);
     }
 
+    @Test public void elevatedSewerChestUsesSevenBlockScaffoldPlan(){
+        ChestScaffoldPlan plan=ChestScaffoldPlan.forChest(new BlockPos(80,60,66));
+        assertNotNull(plan);
+        assertEquals(new BlockPos(81,53,63),plan.getStagingFeet());
+        assertEquals(7,plan.getPlacementCount());
+        assertEquals(new BlockPos(81,53,63),plan.getPlacedBlock(0));
+        assertEquals(new BlockPos(81,59,63),plan.getPlacedBlock(6));
+        assertEquals(new BlockPos(81,58,63),plan.getSupportBlock(6));
+        assertEquals(new BlockPos(81,60,63),plan.getTopStandingPosition());
+        assertNull("the scaffold route must not apply to unrelated chests",
+                ChestScaffoldPlan.forChest(new BlockPos(80,60,65)));
+    }
+
     @Test public void chestApproachPlannerSearchesMultipleSidesAndHeights(){
         BlockPos chest=new BlockPos(20,69,75);
         java.util.List<BlockPos> candidates=ChestApproachPlanner.candidates(chest,3,3);

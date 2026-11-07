@@ -2,11 +2,14 @@ package dev.atlasdive.geode.client;
 
 import dev.atlasdive.geode.GeodeConfig;
 import dev.atlasdive.geode.path.*;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockFalling;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.gui.inventory.GuiChest;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.inventory.ContainerChest;
+import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntityChest;
 import net.minecraft.util.ChatComponentText;
@@ -27,7 +30,7 @@ import java.util.concurrent.*;
 public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
-    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,OPEN,LOOT }
+    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
@@ -38,6 +41,13 @@ public final class GeodeClient {
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
     private final ParticleChestDetector particleDetector=new ParticleChestDetector();
     private World trackedParticleWorld;
+    private ChestScaffoldPlan scaffoldPlan;
+    private BlockPos scaffoldedChest;
+    private final Set<BlockPos> failedScaffoldChests=new HashSet<BlockPos>();
+    private int scaffoldIndex,scaffoldTicks,scaffoldAttempts,scaffoldOriginalSlot=-1;
+    private float scaffoldOriginalPitch;
+    private boolean scaffoldStateSaved,scaffoldJumpIssued,scaffoldJumpKeyHeld,scaffoldAirborneSeen,scaffoldPlaceRequested,scaffoldPlaced;
+    private int scaffoldPlaceTick;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
@@ -65,7 +75,8 @@ public final class GeodeClient {
         collectResult(p);
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         switch(stage){
-            case TO_LAUNCH:case TO_GATE:case TO_CHEST:case PATROL:tickRoute(p,w);break;
+            case TO_LAUNCH:case TO_GATE:case TO_CHEST:case TO_SCAFFOLD:case PATROL:tickRoute(p,w);break;
+            case BUILD_SCAFFOLD:tickScaffold(p,w);break;
             case ENTER_GATE:tickGateEntry(p);break;
             case WAIT_GATE_LANDING:movement.stop();tickGateLanding(p,w);break;
             case WAIT_LAUNCH:
@@ -108,7 +119,8 @@ public final class GeodeClient {
             mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,95,0xAAAAAA);
         }
         mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,106,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,117,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Scaffold: "+scaffoldIndex+"/7"+(stage==Stage.BUILD_SCAFFOLD?" placing":""),7,117,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,128,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -145,6 +157,7 @@ public final class GeodeClient {
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
         cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
+        scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;particleDetector.clear();trackedParticleWorld=mc.theWorld;
         failedGateApproaches.clear();resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
@@ -153,6 +166,7 @@ public final class GeodeClient {
         running=false;stage=Stage.IDLE;status=why;movement.stop();
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
         particleDetector.clear();trackedParticleWorld=null;activeParticles=0;
+        restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
     }
     private void tickRoute(EntityPlayerSP p,World w){
         if(stage==Stage.PATROL&&++patrolScanTicks>=GeodeConfig.scanIntervalTicks){
@@ -172,6 +186,8 @@ public final class GeodeClient {
             movement.stop();
             if(stage==Stage.PATROL){
                 skipPatrolWaypoint("Patrol waypoint blocked; advancing to the next spiral point");
+            }else if(stage==Stage.TO_SCAFFOLD){
+                failScaffold(p,w,"Could not reach the scaffold staging position");
             }else{
                 retryTicks=ticks+5;status="Blocked - recalculating path";
             }
@@ -194,6 +210,8 @@ public final class GeodeClient {
                 retryTicks=ticks+20;
                 status="Gate approach target missing; replanning";
             }
+        }else if(stage==Stage.TO_SCAFFOLD){
+            beginScaffold(p);
         }else if(stage==Stage.TO_CHEST){
             if(chest!=null&&p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>7.0D){
                 status="Reached chest transit waypoint; continuing toward "+chest;
@@ -218,6 +236,7 @@ public final class GeodeClient {
         if(stage==Stage.TO_LAUNCH)routeLaunch(p,w);
         else if(stage==Stage.TO_GATE)routeGate(p,w);
         else if(stage==Stage.TO_CHEST&&chest!=null)routeChest(p,w,chest);
+        else if(stage==Stage.TO_SCAFFOLD&&chest!=null)routeScaffoldStaging(p,w);
         else if(stage==Stage.PATROL)routePatrol(p,w);
     }
     private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
@@ -234,17 +253,31 @@ public final class GeodeClient {
         route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
+        ChestScaffoldPlan plan=ChestScaffoldPlan.forChest(c);
+        if(plan!=null&&!c.equals(scaffoldedChest)&&!failedScaffoldChests.contains(c)){
+            scaffoldPlan=plan;
+            stage=Stage.TO_SCAFFOLD;
+            status="Pathfinding to scaffold base "+plan.getStagingFeet();
+            routeScaffoldStaging(p,w);
+            return;
+        }
+        routeChestDirect(p,w,c);
+    }
+
+    private void routeScaffoldStaging(EntityPlayerSP p,World w){
+        if(scaffoldPlan==null||chest==null){failScaffold(p,w,"Scaffold plan was lost");return;}
+        route(p,w,Collections.singletonList(scaffoldPlan.getStagingFeet()),"chest scaffold staging");
+    }
+
+    private void routeChestDirect(EntityPlayerSP p,World w,BlockPos c){
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
         BlockPos waypoint=ChestRoutePlanner.nextWaypoint(p.posX,p.posZ,c,56,y);
         if(waypoint!=null){
-            // Replan in bounded segments so distant targets are not clipped by the
-            // local collision snapshot (and avoid capturing a huge world volume).
             status="Routing toward distant chest via waypoint "+waypoint;
             route(p,w,box(waypoint.x-3,waypoint.x+3,y-4,y+4,waypoint.z-3,waypoint.z+3),
                     "chest "+c+" transit");
             return;
         }
-        // Search a three-block ring and multiple Y levels around the chest.
         route(p,w,ChestApproachPlanner.candidates(c,3,3),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
@@ -331,6 +364,8 @@ public final class GeodeClient {
         if(goals.isEmpty()){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("No loaded standable cells at this patrol waypoint");
+            }else if("chest scaffold staging".equals(why)&&chest!=null){
+                failScaffold(p,w,"Scaffold staging position is not reachable");
             }else if(why.startsWith("chest ")&&chest!=null){
                 cooldown.put(chest,w.getTotalWorldTime()+200L);
                 status="No safe approach cells for "+chest+"; skipping this chest";
@@ -345,6 +380,8 @@ public final class GeodeClient {
         if(!snap.canStand(start)){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("Patrol start cell is not standable");
+            }else if("chest scaffold staging".equals(why)&&chest!=null){
+                failScaffold(p,w,"Current position is outside the scaffold path snapshot");
             }else{
                 status="Start position is not standable in snapshot: "+start;
                 retryTicks=ticks+20;
@@ -376,12 +413,16 @@ public final class GeodeClient {
                     status="Path to gate approach ready: "+approach+"; opening "+aperture;
                 }else if(stage==Stage.PATROL){
                     status="Sewer patrol leg "+patrolLeg+" path ready ("+r.steps.size()+" steps) toward "+patrolWaypoint;
+                }else if(stage==Stage.TO_SCAFFOLD){
+                    status="Path to scaffold base ready ("+r.steps.size()+" steps)";
                 }else{
                     status=purpose+" path ready ("+r.steps.size()+" steps)";
                 }
                 movement.setPath(r.steps,p);
             }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("No path to patrol waypoint ("+r.expanded+" nodes)");
+            }else if(stage==Stage.TO_SCAFFOLD&&chest!=null){
+                failScaffold(p,mc.theWorld,"No path to scaffold staging position");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
                 cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
                 status="No route to chest "+chest+" ("+r.expanded+" nodes); trying another chest";
@@ -391,8 +432,179 @@ public final class GeodeClient {
                 status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";
                 retryTicks=ticks+40;
             }
-        }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
+        }catch(Exception ex){
+            if(stage==Stage.TO_SCAFFOLD&&chest!=null)failScaffold(p,mc.theWorld,"Scaffold path search error: "+ex.getClass().getSimpleName());
+            else{status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
+        }
     }
+    private void beginScaffold(EntityPlayerSP p){
+        movement.stop();
+        if(scaffoldPlan==null||chest==null){failScaffold(p,mc.theWorld,"No scaffold plan is active");return;}
+        BlockPos base=scaffoldPlan.getStagingFeet();
+        double dx=p.posX-(base.x+.5D),dz=p.posZ-(base.z+.5D);
+        if(dx*dx+dz*dz>0.8D*0.8D||!p.onGround){
+            failScaffold(p,mc.theWorld,"Player did not arrive at the scaffold base safely");
+            return;
+        }
+        scaffoldOriginalSlot=p.inventory.currentItem;
+        scaffoldOriginalPitch=p.rotationPitch;
+        scaffoldStateSaved=true;
+        scaffoldIndex=0;scaffoldTicks=0;scaffoldAttempts=0;
+        scaffoldJumpIssued=false;scaffoldJumpKeyHeld=false;scaffoldAirborneSeen=false;
+        scaffoldPlaceRequested=false;scaffoldPlaced=false;
+        stage=Stage.BUILD_SCAFFOLD;
+        status="Building 7-block scaffold at "+base;
+    }
+
+    private void tickScaffold(EntityPlayerSP p,World w){
+        if(scaffoldPlan==null||chest==null){failScaffold(p,w,"Scaffold state is missing");return;}
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindBack.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindLeft.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindRight.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindSneak.getKeyCode(),false);
+        if(scaffoldJumpKeyHeld){
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),false);
+            scaffoldJumpKeyHeld=false;
+        }
+        p.rotationPitch=84.0F;
+
+        if(scaffoldIndex>=scaffoldPlan.getPlacementCount()){
+            completeScaffold(p,w);
+            return;
+        }
+
+        BlockPos target=scaffoldPlan.getPlacedBlock(scaffoldIndex);
+        BlockPos support=scaffoldPlan.getSupportBlock(scaffoldIndex);
+        net.minecraft.util.BlockPos targetMc=new net.minecraft.util.BlockPos(target.x,target.y,target.z);
+        net.minecraft.util.BlockPos supportMc=new net.minecraft.util.BlockPos(support.x,support.y,support.z);
+        scaffoldTicks++;
+
+        if(scaffoldPlaceRequested&&!w.isAirBlock(targetMc))scaffoldPlaced=true;
+
+        if(scaffoldPlaced){
+            double feet=p.getEntityBoundingBox().minY;
+            if(p.onGround&&feet>=target.y+0.75D){
+                scaffoldIndex++;
+                scaffoldTicks=0;scaffoldAttempts=0;
+                scaffoldJumpIssued=false;scaffoldAirborneSeen=false;
+                scaffoldPlaceRequested=false;scaffoldPlaced=false;
+                status="Scaffold placement "+scaffoldIndex+"/7 confirmed";
+                if(scaffoldIndex>=scaffoldPlan.getPlacementCount())completeScaffold(p,w);
+            }
+            return;
+        }
+
+        if(scaffoldPlaceRequested&&scaffoldTicks-scaffoldPlaceTick>8&&w.isAirBlock(targetMc)){
+            scaffoldPlaceRequested=false;
+        }
+
+        if(!w.isAirBlock(targetMc)){
+            failScaffold(p,w,"Scaffold target is occupied: "+target);
+            return;
+        }
+        if(!w.isBlockLoaded(supportMc,false)||!w.isSideSolid(supportMc,EnumFacing.UP,false)){
+            failScaffold(p,w,"No solid support beneath scaffold block "+target);
+            return;
+        }
+
+        if(!p.onGround){
+            scaffoldAirborneSeen=true;
+            if(!scaffoldPlaceRequested&&p.getEntityBoundingBox().minY>=target.y+1.02D){
+                ItemStack held=selectScaffoldBlock(p);
+                if(held==null){
+                    failScaffold(p,w,"No usable solid blocks in the hotbar (need 7 total)");
+                    return;
+                }
+                boolean sent=mc.playerController.onPlayerRightClick(p,mc.theWorld,held,supportMc,EnumFacing.UP,
+                        new Vec3(support.x+0.5D,support.y+1.0D,support.z+0.5D));
+                if(sent){
+                    p.swingItem();
+                    scaffoldPlaceRequested=true;
+                    scaffoldPlaceTick=scaffoldTicks;
+                    status="Placing scaffold block "+(scaffoldIndex+1)+"/7 at "+target;
+                }
+            }
+            if(scaffoldTicks>45&&!scaffoldPlaced){
+                failScaffold(p,w,"Could not complete the jump for scaffold block "+(scaffoldIndex+1));
+            }
+            return;
+        }
+
+        if(scaffoldAirborneSeen&&!scaffoldPlaced&&!scaffoldPlaceRequested){
+            scaffoldJumpIssued=false;
+            scaffoldAirborneSeen=false;
+            if(++scaffoldAttempts>=3){
+                failScaffold(p,w,"Failed to place scaffold block at "+target);
+                return;
+            }
+        }
+
+        if(!scaffoldJumpIssued){
+            if(selectScaffoldBlock(p)==null){
+                failScaffold(p,w,"No usable solid blocks in the hotbar (need 7 total)");
+                return;
+            }
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),true);
+            scaffoldJumpKeyHeld=true;
+            scaffoldJumpIssued=true;
+            scaffoldTicks=0;
+        }
+        if(scaffoldTicks>60)failScaffold(p,w,"Scaffold jump timed out at "+target);
+    }
+
+    private ItemStack selectScaffoldBlock(EntityPlayerSP p){
+        for(int slot=0;slot<9;slot++){
+            ItemStack stack=p.inventory.mainInventory[slot];
+            if(stack==null||stack.stackSize<=0||!(stack.getItem() instanceof ItemBlock))continue;
+            Block block=((ItemBlock)stack.getItem()).getBlock();
+            if(block.getMaterial().isSolid()&&!(block instanceof BlockFalling)){
+                if(p.inventory.currentItem!=slot){
+                    p.inventory.currentItem=slot;
+                    mc.playerController.updateController();
+                }
+                return stack;
+            }
+        }
+        return null;
+    }
+
+    private void completeScaffold(EntityPlayerSP p,World w){
+        if(chest==null||scaffoldPlan==null)return;
+        restoreScaffoldState(p);
+        scaffoldedChest=chest;
+        BlockPos top=scaffoldPlan.getTopStandingPosition();
+        status="Scaffold complete: 7 blocks placed; pathfinding from "+top+" to "+chest;
+        scaffoldPlan=null;
+        stage=Stage.TO_CHEST;
+        routeChestDirect(p,w,chest);
+    }
+
+    private void failScaffold(EntityPlayerSP p,World w,String reason){
+        restoreScaffoldState(p);
+        if(chest!=null)failedScaffoldChests.add(chest);
+        scaffoldPlan=null;scaffoldIndex=0;
+        stage=Stage.TO_CHEST;
+        status=reason+"; trying ordinary chest pathfinding";
+        if(chest!=null&&w!=null)routeChestDirect(p,w,chest);
+        else{stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;}
+    }
+
+    private void restoreScaffoldState(EntityPlayerSP p){
+        if(mc!=null&&mc.gameSettings!=null){
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),false);
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),false);
+        }
+        if(p!=null&&scaffoldStateSaved){
+            if(scaffoldOriginalSlot>=0&&scaffoldOriginalSlot<9)p.inventory.currentItem=scaffoldOriginalSlot;
+            p.rotationPitch=scaffoldOriginalPitch;
+            if(mc!=null&&mc.playerController!=null)mc.playerController.updateController();
+        }
+        scaffoldOriginalSlot=-1;scaffoldStateSaved=false;
+        scaffoldJumpIssued=false;scaffoldJumpKeyHeld=false;scaffoldAirborneSeen=false;
+        scaffoldPlaceRequested=false;scaffoldPlaced=false;scaffoldTicks=0;scaffoldAttempts=0;
+    }
+
     private void findChest(EntityPlayerSP p,World w){
         BlockPos best=findNearestLoadedChest(p,w);
         if(best!=null){
