@@ -210,8 +210,10 @@ public final class GeodeClient {
             status="Patrol coverage exhausted; continuing to scan loaded Sewer chunks";
             return;
         }
-        if(patrolOrigin==null)patrolOrigin=playerPos(p);
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+        // Keep patrol coverage centered on the Sewer scan area, not on the last
+        // waypoint. This avoids progressively drifting outside the chest scan radius.
+        if(patrolOrigin==null)patrolOrigin=new BlockPos(GATE.x,y,GATE.z);
         patrolWaypoint=PatrolPlanner.waypoint(patrolOrigin,patrolLeg,y);
         int patrolRadius=Math.max(4,GeodeConfig.scanRadius-3);
         if(!PatrolPlanner.insideHorizontalRadius(patrolWaypoint,GATE,patrolRadius)){
