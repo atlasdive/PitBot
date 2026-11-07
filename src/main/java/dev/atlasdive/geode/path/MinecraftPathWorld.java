@@ -36,6 +36,7 @@ public final class MinecraftPathWorld implements PathWorld {
         // into possible player-feet positions. This avoids hundreds of thousands of per-cell
         // collision queries on the render/client thread.
         boolean[] blocked=new boolean[w*h*d];
+        boolean[] supported=new boolean[w*h*d];
         AxisAlignedBB region=new AxisAlignedBB(ax,ay,az,ax+w,ay+h,az+d);
         List<AxisAlignedBB> collisions=world.getCollidingBoundingBoxes(player,region);
         for(AxisAlignedBB box:collisions){
@@ -49,6 +50,22 @@ public final class MinecraftPathWorld implements PathWorld {
                 AxisAlignedBB playerBox=new AxisAlignedBB(x+.20D,y,z+.20D,x+.80D,y+1.80D,z+.80D);
                 if(playerBox.intersectsWith(box))blocked[out.index(x,y,z)]=true;
             }
+
+            // Support is based on actual collision-box tops under the player's footprint,
+            // not isSideSolid(). The latter rejects useful partial blocks such as iron bars.
+            int feetY=(int)Math.round(box.maxY);
+            if(Math.abs(box.maxY-feetY)<0.035D&&feetY>=ay&&feetY<ay+h){
+                int sx0=Math.max(ax,(int)Math.floor(box.minX-.80D));
+                int sx1=Math.min(ax+w-1,(int)Math.floor(box.maxX-.20D));
+                int sz0=Math.max(az,(int)Math.floor(box.minZ-.80D));
+                int sz1=Math.min(az+d-1,(int)Math.floor(box.maxZ-.20D));
+                for(int x=sx0;x<=sx1;x++)for(int z=sz0;z<=sz1;z++){
+                    if(box.maxX>x+.20D&&box.minX<x+.80D
+                            &&box.maxZ>z+.20D&&box.minZ<z+.80D){
+                        supported[out.index(x,feetY,z)]=true;
+                    }
+                }
+            }
         }
 
         for(int x=ax;x<ax+w;x++)for(int y=ay;y<ay+h;y++)for(int z=az;z<az+d;z++){
@@ -61,7 +78,7 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean climb=b instanceof BlockLadder||b instanceof BlockVine;
             int i=out.index(x,y,z);
             boolean occupy=!blocked[i];
-            boolean support=world.isBlockLoaded(p.down(),false)&&world.isSideSolid(p.down(),EnumFacing.UP,false);
+            boolean support=supported[i];
             byte f=0;
             if(occupy)f|=OCCUPY;
             if(support)f|=SUPPORT;
@@ -91,6 +108,22 @@ public final class MinecraftPathWorld implements PathWorld {
     public boolean climbable(BlockPos p){return(flags(p)&CLIMB)!=0;}
     public boolean liquid(BlockPos p){return(flags(p)&LIQUID)!=0;}
     public double extraCost(BlockPos p){int i=idx(p);return i<0?1000000D:costs[i];}
+
+    public boolean lineClear(BlockPos from,BlockPos to){
+        if(from.y!=to.y)return false;
+        double dx=to.x-from.x,dz=to.z-from.z;
+        int samples=Math.max(1,(int)Math.ceil(Math.sqrt(dx*dx+dz*dz)*5.0D));
+        for(int i=0;i<=samples;i++){
+            double t=i/(double)samples;
+            double cx=from.x+.5D+dx*t,cz=from.z+.5D+dz*t;
+            int minX=(int)Math.floor(cx-.30D),maxX=(int)Math.floor(cx+.30D);
+            int minZ=(int)Math.floor(cz-.30D),maxZ=(int)Math.floor(cz+.30D);
+            for(int x=minX;x<=maxX;x++)for(int z=minZ;z<=maxZ;z++){
+                if(!clear(new BlockPos(x,from.y,z))||!clear(new BlockPos(x,from.y+1,z)))return false;
+            }
+        }
+        return true;
+    }
 
     public boolean jumpArcClear(BlockPos from,BlockPos to){
         int n=Math.max(6,(int)Math.ceil(Math.sqrt((to.x-from.x)*(double)(to.x-from.x)+(to.z-from.z)*(double)(to.z-from.z))*4D));
