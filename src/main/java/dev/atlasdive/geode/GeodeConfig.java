@@ -8,7 +8,7 @@ public final class GeodeConfig {
     private static Configuration config;
     public static String[] allowedServers = {"localhost", "127.0.0.1"};
     public static int scanIntervalTicks = 20;
-    public static int scanRadius = 32;
+    public static int scanRadius = 64;
     public static int maxExpandedNodes = 45000;
     public static int maxFallBlocks = 48;
     public static int gateScanRadius = 12;
@@ -21,9 +21,19 @@ public final class GeodeConfig {
                 "Exact hostnames where Geode may run. Add your own remake server.");
         scanIntervalTicks = config.getInt("scanIntervalTicks", "chests", 20, 5, 100,
                 "Ticks between scans of loaded chunks.");
-        scanRadius = config.getInt("scanRadius", "chests", 32, 8, 64,
+        scanRadius = config.getInt("scanRadius", "chests", 64, 8, 64,
                 "Horizontal Sewer chest scan radius.");
-        maxExpandedNodes = config.getInt("maxExpandedNodes", "pathfinding", 45000, 5000, 150000,
+        // Upgrade the old generated default (32) while preserving other custom values.
+        int scanRadiusMigration = config.getInt("scanRadiusMigration", "chests", 0, 0, 1,
+                "Internal config migration marker.");
+        if (scanRadiusMigration == 0) {
+            if (scanRadius == 32) {
+                scanRadius = 64;
+                config.get("chests", "scanRadius", 64).set(64);
+            }
+            config.get("chests", "scanRadiusMigration", 1).set(1);
+        }
+        maxExpandedNodes = config.getInt("maxExpandedNodes", "pathfinding", 75000, 5000, 150000,
                 "Maximum A* nodes expanded in one request.");
         maxFallBlocks = config.getInt("maxFallBlocks", "pathfinding", 48, 1, 96,
                 "Maximum vertical drop considered. Falls have no extra damage penalty.");
