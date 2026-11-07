@@ -1,0 +1,43 @@
+package dev.atlasdive.geode;
+
+import net.minecraftforge.common.config.Configuration;
+import java.io.File;
+import java.util.Locale;
+
+public final class GeodeConfig {
+    private static Configuration config;
+    public static String[] allowedServers = {"localhost", "127.0.0.1"};
+    public static int scanIntervalTicks = 20;
+    public static int scanRadius = 32;
+    public static int maxExpandedNodes = 45000;
+    public static int maxFallBlocks = 48;
+
+    private GeodeConfig() {}
+
+    public static void load(File file) {
+        config = new Configuration(file);
+        allowedServers = config.getStringList("allowedServers", "security", allowedServers,
+                "Exact hostnames where Geode may run. Add your own remake server.");
+        scanIntervalTicks = config.getInt("scanIntervalTicks", "chests", 20, 5, 100,
+                "Ticks between scans of loaded chunks.");
+        scanRadius = config.getInt("scanRadius", "chests", 32, 8, 64,
+                "Horizontal Sewer chest scan radius.");
+        maxExpandedNodes = config.getInt("maxExpandedNodes", "pathfinding", 45000, 5000, 150000,
+                "Maximum A* nodes expanded in one request.");
+        maxFallBlocks = config.getInt("maxFallBlocks", "pathfinding", 48, 1, 96,
+                "Maximum vertical drop considered. Falls have no extra damage penalty.");
+        if (config.hasChanged()) config.save();
+    }
+
+    public static boolean isAllowed(String address, boolean singleplayer) {
+        if (singleplayer) return true;
+        if (address == null || address.trim().isEmpty()) return false;
+        String host = address.trim().toLowerCase(Locale.ROOT);
+        int colon = host.lastIndexOf(':');
+        if (colon > 0 && host.indexOf(':') == colon) host = host.substring(0, colon);
+        for (String value : allowedServers) {
+            if (value != null && host.equals(value.trim().toLowerCase(Locale.ROOT))) return true;
+        }
+        return false;
+    }
+}
