@@ -19,7 +19,7 @@ public final class Pathfinder {
         while(!open.isEmpty()&&expanded<maxNodes){
             Entry cur=open.poll();Double known=best.get(cur.pos);
             if(known==null||cur.g>known+EPS)continue;
-            if(targets.contains(cur.pos))return build(cur.pos,parents,best,expanded);
+            if(targets.contains(cur.pos))return build(cur.pos,parents,best,expanded,world);
             expanded++;
 
             if(world.climbable(cur.pos)||world.liquid(cur.pos)){
@@ -112,14 +112,43 @@ public final class Pathfinder {
         return true;
     }
 
-    private static PathResult build(BlockPos end,Map<BlockPos,Parent> parents,Map<BlockPos,Double> costs,int expanded){
-        List<PathStep> out=new ArrayList<PathStep>();BlockPos p=end;
+    private static PathResult build(BlockPos end,Map<BlockPos,Parent> parents,Map<BlockPos,Double> costs,
+                                    int expanded,PathWorld world){
+        List<PathStep> raw=new ArrayList<PathStep>();BlockPos p=end;
         while(p!=null){
             Parent parent=parents.get(p);
-            out.add(new PathStep(p,parent==null?MovementKind.WALK:parent.kind,costs.containsKey(p)?costs.get(p):0.0D));
+            raw.add(new PathStep(p,parent==null?MovementKind.WALK:parent.kind,
+                    costs.containsKey(p)?costs.get(p):0.0D));
             p=parent==null?null:parent.pos;
         }
-        Collections.reverse(out);return new PathResult(out,expanded);
+        Collections.reverse(raw);
+        return new PathResult(smooth(raw,world),expanded);
+    }
+
+    /** String-pull only same-height WALK chains; never smooth across jumps or drops. */
+    private static List<PathStep> smooth(List<PathStep> raw,PathWorld world){
+        if(raw.size()<3)return raw;
+        List<PathStep> out=new ArrayList<PathStep>();
+        int anchor=0;
+        out.add(raw.get(0));
+        while(anchor<raw.size()-1){
+            int chosen=anchor+1;
+            for(int candidate=raw.size()-1;candidate>anchor+1;candidate--){
+                boolean normalWalk=true;
+                for(int k=anchor+1;k<=candidate;k++){
+                    PathStep step=raw.get(k);
+                    if(step.kind!=MovementKind.WALK||step.pos.y!=raw.get(anchor).pos.y){
+                        normalWalk=false;break;
+                    }
+                }
+                if(normalWalk&&world.lineClear(raw.get(anchor).pos,raw.get(candidate).pos)){
+                    chosen=candidate;break;
+                }
+            }
+            out.add(raw.get(chosen));
+            anchor=chosen;
+        }
+        return out;
     }
     private static double heuristic(BlockPos p,List<BlockPos> goals){
         double best=Double.POSITIVE_INFINITY;
