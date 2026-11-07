@@ -23,6 +23,8 @@ public final class MovementController {
     public boolean hasPath(){return !path.isEmpty();}
     public boolean complete(){return hasPath()&&index>=path.size();}
     public boolean stuck(){return stuck;}
+    public List<PathStep> getPath(){return path;}
+    public int getIndex(){return index;}
 
     public void tick(EntityPlayerSP player){
         if(player==null||!hasPath()||complete()){release();return;}
