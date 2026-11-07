@@ -49,7 +49,7 @@ public class PathfinderTest {
         world.iron.add(new BlockPos(0,5,-1));
         world.iron.add(new BlockPos(0,5,1));
 
-        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,5,0),1,0,8);
+        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(1,6,0),1,8);
         assertNotNull("must detect a real iron-bar frame",gate);
         assertEquals(5,gate.planeY);
         assertTrue(gate.columns.contains(new BlockPos(0,5,0)));
@@ -66,11 +66,28 @@ public class PathfinderTest {
         assertTrue("path must contain a falling step through the detected aperture",crossed);
     }
 
+    @Test public void gatePlannerFindsGrateBelowApproximateMarker(){
+        TestWorld world=new TestWorld();
+        world.support.clear();
+        world.support.add(new BlockPos(0,0,0));
+        world.support.add(new BlockPos(1,6,0));
+        // The approximate marker is four blocks above the actual grate plane.
+        world.iron.add(new BlockPos(-1,4,0));
+        world.iron.add(new BlockPos(1,4,0));
+        world.iron.add(new BlockPos(0,4,-1));
+        world.iron.add(new BlockPos(0,4,1));
+
+        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,8,0),new BlockPos(1,6,0),1,8);
+        assertNotNull(gate);
+        assertEquals("planner should choose the real grate plane, not the marker height",4,gate.planeY);
+        assertTrue(gate.columns.contains(new BlockPos(0,4,0)));
+    }
+
     @Test public void gatePlannerRejectsAnUnframedOrBlockedColumn(){
         TestWorld world=new TestWorld();
         world.support.clear();
         world.support.add(new BlockPos(0,0,0));
-        GatePlan noFrame=new GatePlanner().find(world,new BlockPos(0,5,0),1,0,8);
+        GatePlan noFrame=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(1,6,0),1,8);
         assertNull(noFrame);
 
         world.iron.add(new BlockPos(-1,5,0));
@@ -78,7 +95,7 @@ public class PathfinderTest {
         world.iron.add(new BlockPos(0,5,-1));
         world.iron.add(new BlockPos(0,5,1));
         world.blocked.add(new BlockPos(0,5,0));
-        GatePlan blocked=new GatePlanner().find(world,new BlockPos(0,5,0),1,0,8);
+        GatePlan blocked=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(1,6,0),1,8);
         assertNull(blocked);
     }
 
