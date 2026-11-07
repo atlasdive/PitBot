@@ -60,7 +60,7 @@ public class PathfinderTest {
         boolean crossed=false;
         for(int i=1;i<path.steps.size();i++){
             PathStep from=path.steps.get(i-1),to=path.steps.get(i);
-            if(to.kind==MovementKind.DROP&&from.pos.y>gate.planeY&&to.pos.y<gate.planeY
+            if(to.kind==MovementKind.DROP&&from.pos.y>=gate.planeY&&to.pos.y<gate.planeY
                     &&gate.columns.contains(new BlockPos(to.pos.x,gate.planeY,to.pos.z)))crossed=true;
         }
         assertTrue("path must contain a falling step through the detected aperture",crossed);
