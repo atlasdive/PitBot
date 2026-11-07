@@ -27,7 +27,9 @@ public final class GatePlanner {
         // A route must start above the grate. Do not select a grate plane the
         // player has already fallen below.
         minPlaneY=marker.y-maxFall;
-        maxPlaneY=Math.min(marker.y+2,start.y-1);
+        // BlockPos.y is floor(feetY), so a grate in the player's current block
+        // layer can still be above the actual feet when standing on partial iron bars.
+        maxPlaneY=Math.min(marker.y+2,start.y);
         if(maxPlaneY<minPlaneY)return null;
 
         for(int plane=maxPlaneY;plane>=minPlaneY;plane--){
