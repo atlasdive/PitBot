@@ -47,7 +47,9 @@ public final class GatePlanner {
                 clearColumns++;
 
                 int frameScore=countNearbyIronBars(world,x,z,plane);
-                if(frameScore<2)continue;
+                // Require a frame on at least three cardinal sides. This prevents
+                // nearby bars from making an unrelated diagonal air cell look like a hole.
+                if(frameScore<300)continue;
                 framedColumns++;
 
                 List<BlockPos> localApproaches=new ArrayList<BlockPos>();
@@ -86,19 +88,19 @@ public final class GatePlanner {
     }
 
     private int countNearbyIronBars(PathWorld world,int x,int z,int plane){
-        int sameFloor=0,staggered=0;
-        // The grate/floor itself is usually one block below the player's feet plane.
-        // Also inspect one block above and below to tolerate connected-bar shapes.
-        for(int dy=-1;dy<=1;dy++){
-            for(int dx=-2;dx<=2;dx++)for(int dz=-2;dz<=2;dz++){
-                if(dx==0&&dz==0&&dy==0)continue;
-                if(Math.abs(dx)+Math.abs(dz)>3)continue;
-                if(!world.ironBars(new BlockPos(x+dx,plane+dy,z+dz)))continue;
-                if(dy==-1)sameFloor++;
-                else staggered++;
+        int sides=0,total=0;
+        for(int[] d:APPROACH_DIRS){
+            boolean found=false;
+            for(int dy=-1;dy<=1;dy++){
+                if(world.ironBars(new BlockPos(x+d[0],plane+dy,z+d[1]))){
+                    found=true;
+                    total++;
+                }
             }
+            if(found)sides++;
         }
-        return sameFloor*10+staggered;
+        // Hundreds encode the number of framed sides; the remainder ranks denser frames.
+        return sides*100+total;
     }
 
     private static final int[][] APPROACH_DIRS={{1,0},{-1,0},{0,1},{0,-1}};
