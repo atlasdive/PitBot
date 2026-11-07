@@ -184,7 +184,7 @@ public final class GeodeClient {
         if(ticks<retryTicks)return;
         if(openAttempts>=3){cooldown.put(chest,w.getTotalWorldTime()+200L);chest=null;stage=Stage.SEEK;return;}
         openAttempts++;retryTicks=ticks+12;
-        mc.playerController.onPlayerRightClick(p,w,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
+        mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
     }
     private void lootChest(EntityPlayerSP p){
         if(!(mc.currentScreen instanceof GuiChest)||!(p.openContainer instanceof ContainerChest)){finish();return;}
