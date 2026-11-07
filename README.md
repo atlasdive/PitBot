@@ -13,10 +13,10 @@ Press **G** to start or stop Geode.
 
 1. Prioritize the LaunchPad column at `(16, 95, 16)`; only use nearby safe cells if the exact column cannot be occupied.
 2. Wait for the LaunchPad to launch the player downward. Geode waits for the player to land before planning the next route.
-3. Scan the area around `(47, 66, 75)` for an actual opening in an iron-bar layer, using the block collision snapshot to confirm a player-sized vertical shaft and a safe landing below.
-4. Pathfind to that specific opening. The selected A* route must contain a downward DROP transition that starts above the grate and lands below it through the detected aperture.
-5. Track the player's feet across the grate height and confirm a downward crossing inside the selected opening. Merely reaching a nearby lower block does not count as Sewer entry.
-6. Only after the crossing is verified and the player is grounded below the grate does Geode scan loaded tile entities for existing chests.
+3. Scan around `(47, 66, 75)` for an opening in the iron-bar floor, using the collision snapshot to check the player-sized gap and nearby iron-bar frame.
+4. Find supported standing cells beside each opening. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
+5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
+6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
 7. Pathfind to a standing position beside a chest, open it, shift-click its contents into the player's inventory, then continue scanning.
 8. If no chest is found after several scans, patrol nearby waypoints to load more chunks.
 
@@ -29,8 +29,8 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
-- A dedicated GatePlanner detects iron-bar frames and validates the full player-sized drop column before a route is accepted.
-- Sewer entry requires a detected DROP edge through the chosen opening and a runtime downward-crossing check at the grate plane.
+- A dedicated GatePlanner detects iron-bar openings and their supported approach cells; it does not require a landing directly underneath the opening.
+- The movement controller steps from the chosen approach into the hole and requires a runtime downward-crossing check at the grate plane before Sewer entry.
 - The HUD displays the detected gap, grate height, crossing verification, current state, target chest, and expanded A* node count.
 - The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
 
