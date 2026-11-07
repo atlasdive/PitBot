@@ -142,6 +142,26 @@ public class PathfinderTest {
         assertNull(blocked);
     }
 
+    @Test public void sewerPatrolUsesAnExpandingNonRepeatingSpiral(){
+        BlockPos origin=new BlockPos(40,66,75);
+        Set<BlockPos> visited=new HashSet<BlockPos>();
+        BlockPos previous=origin;
+        for(int leg=0;leg<16;leg++){
+            BlockPos next=PatrolPlanner.waypoint(origin,leg,66);
+            assertTrue("patrol must never revisit the same waypoint",visited.add(next));
+            assertFalse("patrol must not return to its origin",next.equals(origin));
+            long dx=(long)next.x-previous.x,dz=(long)next.z-previous.z;
+            assertTrue("each patrol leg must make real progress",dx*dx+dz*dz>=64L);
+            previous=next;
+        }
+    }
+
+    @Test public void patrolPlannerCanStopAtTheChestScanBoundary(){
+        BlockPos center=new BlockPos(47,66,75);
+        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(50,66,90),center,32));
+        assertFalse(PatrolPlanner.insideHorizontalRadius(new BlockPos(90,66,90),center,32));
+    }
+
     @Test public void supportsStraightDownDropThroughOneBlockOpening(){
         TestWorld world=new TestWorld();
         world.support.clear();
