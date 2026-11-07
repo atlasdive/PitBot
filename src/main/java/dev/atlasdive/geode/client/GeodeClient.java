@@ -307,6 +307,7 @@ public final class GeodeClient {
     private GatePlan findGatePlan(MinecraftPathWorld snap,BlockPos start){
         int bestFrame=-1;
         int bestPlaneDelta=Integer.MAX_VALUE;
+        int bestPlaneY=GATE.y;
         List<BlockPos> landings=new ArrayList<BlockPos>();
         Set<BlockPos> columns=new HashSet<BlockPos>();
 
@@ -338,23 +339,17 @@ public final class GeodeClient {
 
                 int planeDelta=Math.abs(plane-GATE.y);
                 if(frame>bestFrame||(frame==bestFrame&&planeDelta<bestPlaneDelta)){
-                    bestFrame=frame;bestPlaneDelta=planeDelta;
+                    bestFrame=frame;bestPlaneDelta=planeDelta;bestPlaneY=plane;
                     landings.clear();columns.clear();
                 }
-                if(frame==bestFrame&&planeDelta==bestPlaneDelta){
+                if(frame==bestFrame&&planeDelta==bestPlaneDelta&&plane==bestPlaneY){
                     landings.add(landing);
                     columns.add(new BlockPos(x,plane,z));
                 }
             }
         }
         if(landings.isEmpty())return null;
-        return new GatePlan(landings,columns,GATE.y+(bestPlaneDelta==Integer.MAX_VALUE?0:
-                nearestPlaneOffset(columns,GATE.y)));
-    }
-
-    private int nearestPlaneOffset(Set<BlockPos> columns,int markerY){
-        if(columns.isEmpty())return 0;
-        return columns.iterator().next().y-markerY;
+        return new GatePlan(landings,columns,bestPlaneY);
     }
 
     private boolean clearShaft(PathWorld world,int x,int z,int landingY,int planeY){
