@@ -17,14 +17,15 @@ Press **G** to start or stop Geode.
 4. Find supported standing cells within four horizontal blocks of each opening, provided there is a clear player-width approach corridor. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
 5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
 6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
-7. Pathfind to a standing position beside a chest, open it, shift-click its contents into the player's inventory, then continue scanning.
+7. For distant chests, pathfind in A* segments of at most 56 horizontal blocks; once nearby, search up to 196 standing-position candidates around the chest. Open it, shift-click its contents into the player's inventory, then continue scanning.
 8. If no chest is found after several scans, follow a non-repeating expanding square-spiral around the Sewer scan center to load new chunks. Patrol destinations must be at least five blocks from the current player cell, and blocked/unloaded destinations are skipped rather than retried forever.
 
 The chat message `SEWER! A new treasure spawned somewhere!` is only an optional early scan trigger. Geode also scans periodically, so a chest that existed before the message appeared can still be found.
 
 ## Pathfinding
 
-- 3D A* with multiple goal positions.
+- 3D A* with multiple goal positions and a default budget of 120,000 expanded nodes.
+- Distant chest routes are split into 56-block segments, keeping each collision snapshot bounded while allowing the full 150-block detection radius to be traversed.
 - Collision snapshot is captured on the client thread with a 24-block horizontal margin around the target region; A* runs on a background worker.
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
@@ -55,7 +56,7 @@ The JAR should be written to `build/libs/Geode-0.1.0.jar`.
 
 ## Important limitations
 
-- Chest detection is limited to tile entities in chunks currently loaded by the client. The default horizontal scan radius is 150 blocks from the Sewer center (the previous generated defaults of 32/64 are migrated to 150); Geode scans while travelling along its patrol spiral as well as at each waypoint. It cannot inspect unloaded chunks remotely.
+- Chest detection is limited to tile entities in chunks currently loaded by the client. The default circular horizontal scan radius is 150 blocks from the Sewer center (the previous generated defaults of 32/64 are migrated to 150); Geode scans while travelling along its patrol spiral as well as at each waypoint. It cannot inspect unloaded chunks remotely.
 - The chat announcement contains no chest coordinates.
 - The gate detector searches within `gateScanRadius` (default 12 blocks) and scans down from the player's current feet layer through the configured maximum fall distance. It recognizes iron bars, panes, fences, walls, and opaque blocks around the opening. If the opening is outside the search region or its surrounding blocks do not create a detectable frame, the HUD reports scan counts.
 - The runtime grate-crossing check and the actual movement through the opening still need validation in the running remake world.
