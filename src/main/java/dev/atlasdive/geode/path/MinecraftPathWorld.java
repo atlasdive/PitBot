@@ -13,7 +13,7 @@ import java.util.List;
 
 /** Immutable collision snapshot. Capture on the client thread; search the snapshot off-thread. */
 public final class MinecraftPathWorld implements PathWorld {
-    private static final byte OCCUPY=1, SUPPORT=2, HAZARD=4, CLIMB=8, LIQUID=16, CLEAR=32;
+    private static final byte OCCUPY=1, SUPPORT=2, HAZARD=4, CLIMB=8, LIQUID=16, CLEAR=32, IRON_BARS=64;
     private final int minX,minY,minZ,w,h,d;
     private final byte[] flags;
     private final float[] costs;
@@ -76,6 +76,7 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean liquid=m==Material.water||m==Material.lava;
             boolean hazard=b==Blocks.lava||b==Blocks.flowing_lava||b==Blocks.fire||b==Blocks.cactus;
             boolean climb=b instanceof BlockLadder||b instanceof BlockVine;
+            boolean ironBars=b==Blocks.iron_bars;
             int i=out.index(x,y,z);
             boolean occupy=!blocked[i];
             boolean support=supported[i];
@@ -86,6 +87,7 @@ public final class MinecraftPathWorld implements PathWorld {
             if(climb)f|=CLIMB;
             if(liquid)f|=LIQUID;
             if(occupy&&!hazard)f|=CLEAR;
+            if(ironBars)f|=IRON_BARS;
             out.flags[i]=f;
             float c=0F;
             if(b==Blocks.water||b==Blocks.flowing_water)c+=2F;
@@ -107,6 +109,7 @@ public final class MinecraftPathWorld implements PathWorld {
     public boolean hazard(BlockPos p){return(flags(p)&HAZARD)!=0;}
     public boolean climbable(BlockPos p){return(flags(p)&CLIMB)!=0;}
     public boolean liquid(BlockPos p){return(flags(p)&LIQUID)!=0;}
+    public boolean ironBars(BlockPos p){return(flags(p)&IRON_BARS)!=0;}
     public double extraCost(BlockPos p){int i=idx(p);return i<0?1000000D:costs[i];}
 
     public boolean lineClear(BlockPos from,BlockPos to){
