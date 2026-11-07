@@ -51,8 +51,13 @@ public final class GatePlanner {
                 framedColumns++;
 
                 List<BlockPos> localApproaches=new ArrayList<BlockPos>();
-                for(int[] d:APPROACH_DIRS){
-                    BlockPos approach=aperture.add(d[0],0,d[1]);
+                // A* targets do not have to be the immediately adjacent block.
+                // Include any safe standing position within four horizontal blocks
+                // that has a clear, player-width approach corridor to the aperture.
+                for(int ox=-4;ox<=4;ox++)for(int oz=-4;oz<=4;oz++){
+                    if(ox==0&&oz==0)continue;
+                    if(ox*ox+oz*oz>16)continue;
+                    BlockPos approach=aperture.add(ox,0,oz);
                     if(!world.canStand(approach)||world.hazard(approach))continue;
                     if(!world.clear(approach.add(0,1,0)))continue;
                     if(!world.lineClear(approach,aperture))continue;
