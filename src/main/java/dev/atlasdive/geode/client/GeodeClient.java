@@ -221,18 +221,14 @@ public final class GeodeClient {
         route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
-        double dx=c.x+0.5D-p.posX,dz=c.z+0.5D-p.posZ;
-        double horizontal=Math.sqrt(dx*dx+dz*dz);
-        // Long routes are split into <=56-block A* segments. This keeps every
-        // collision snapshot within its bounded dimensions instead of clipping a
-        // distant target or allocating an enormous full-world volume.
-        if(horizontal>56.0D){
-            double t=56.0D/horizontal;
-            int wx=MathHelper.floor_double(p.posX+dx*t);
-            int wz=MathHelper.floor_double(p.posZ+dz*t);
-            int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
-            status="Routing toward distant chest via waypoint ("+wx+","+y+","+wz+")";
-            route(p,w,box(wx-3,wx+3,y-4,y+4,wz-3,wz+3),"chest "+c+" transit");
+        int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+        BlockPos waypoint=ChestRoutePlanner.nextWaypoint(p.posX,p.posZ,c,56,y);
+        if(waypoint!=null){
+            // Replan in bounded segments so distant targets are not clipped by the
+            // local collision snapshot (and avoid capturing a huge world volume).
+            status="Routing toward distant chest via waypoint "+waypoint;
+            route(p,w,box(waypoint.x-3,waypoint.x+3,y-4,y+4,waypoint.z-3,waypoint.z+3),
+                    "chest "+c+" transit");
             return;
         }
         // Search a three-block ring and multiple Y levels around the chest.
