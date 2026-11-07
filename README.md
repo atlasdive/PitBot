@@ -18,7 +18,7 @@ Press **G** to start or stop Geode.
 5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
 6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
 7. Pathfind to a standing position beside a chest, open it, shift-click its contents into the player's inventory, then continue scanning.
-8. If no chest is found after several scans, patrol nearby waypoints to load more chunks.
+8. If no chest is found after several scans, follow a non-repeating expanding square-spiral around the Sewer scan center to load new chunks. Patrol destinations must be at least five blocks from the current player cell, and blocked/unloaded destinations are skipped rather than retried forever.
 
 The chat message `SEWER! A new treasure spawned somewhere!` is only an optional early scan trigger. Geode also scans periodically, so a chest that existed before the message appeared can still be found.
 
@@ -31,7 +31,9 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 - A stuck movement controller requests a new path.
 - A dedicated GatePlanner detects openings using generic collision barriers and their supported approach cells; it does not require a landing directly underneath the opening.
 - The movement controller steps from the chosen approach into the hole and requires a runtime downward-crossing check at the grate plane before Sewer entry.
-- The HUD displays the detected gap, grate height, crossing verification, current state, target chest, and expanded A* node count.
+- When no loaded chest is found, patrol uses an expanding square spiral (8, 8, 12, 12, 16, 16, ... block legs) centered on the Sewer scan area. It does not wrap back to an eight-point ring.
+- Patrol skips nearby/current cells, advances past unreachable waypoints, and stops when it reaches the configured chest scan boundary.
+- The HUD displays the detected gap, grate height, crossing verification, current patrol leg/waypoint, current state, target chest, and expanded A* node count.
 - The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
 
 ## Server allowlist
