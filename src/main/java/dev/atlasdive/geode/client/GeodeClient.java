@@ -175,8 +175,9 @@ public final class GeodeClient {
         // The marked coordinate is approximate. The planner scans a small area around it,
         // detects a real iron-bar frame, and only accepts a clear shaft through that frame.
         List<BlockPos> volume=new ArrayList<BlockPos>();
-        for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
-            if(dx*dx+dz*dz>12)continue;
+        int radius=GeodeConfig.gateScanRadius;
+        for(int dx=-radius;dx<=radius;dx++)for(int dz=-radius;dz<=radius;dz++){
+            if(dx*dx+dz*dz>radius*radius)continue;
             for(int y=GATE.y+2-GeodeConfig.maxFallBlocks;y<GATE.y;y++)
                 volume.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
         }
@@ -199,15 +200,15 @@ public final class GeodeClient {
         List<BlockPos> goals=new ArrayList<BlockPos>();
         if("Sewer opening".equals(why)){
             GatePlanner planner=new GatePlanner();
-            GatePlan plan=planner.find(snap,GATE,start,4,GeodeConfig.maxFallBlocks);
+            GatePlan plan=planner.find(snap,GATE,start,GeodeConfig.gateScanRadius,GeodeConfig.maxFallBlocks);
             gateDiagnostics="Y "+planner.minPlaneY()+".."+planner.maxPlaneY()
                     +" | clear "+planner.clearColumns()
-                    +" | bars "+planner.framedColumns()
+                    +" | frame "+planner.framedColumns()
                     +" | approach "+planner.approachColumns();
             if(plan==null){
                 gateColumns.clear();gateApproachMap.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
                 goalCandidates=0;
-                status="No iron-bar opening with a safe approach near "+GATE;
+                status="No framed opening with a safe approach near "+GATE;
                 retryTicks=ticks+40;
                 return;
             }
