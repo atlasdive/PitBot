@@ -29,9 +29,12 @@ public final class MinecraftPathWorld implements PathWorld {
     public static MinecraftPathWorld capture(World world,EntityPlayerSP player,BlockPos start,List<BlockPos> goals) {
         int ax=start.x,bx=start.x,ay=start.y,by=start.y,az=start.z,bz=start.z;
         for(BlockPos p:goals){ax=Math.min(ax,p.x);bx=Math.max(bx,p.x);ay=Math.min(ay,p.y);by=Math.max(by,p.y);az=Math.min(az,p.z);bz=Math.max(bz,p.z);}
-        ax=Math.max(-29999990,ax-8);bx=Math.min(29999990,bx+8);
-        az=Math.max(-29999990,az-8);bz=Math.min(29999990,bz+8);
-        ay=Math.max(1,ay-8);by=Math.min(254,by+10);
+        // Larger horizontal margin lets A* route around buildings/walls instead of
+        // exhausting the small connected component immediately around the gate.
+        final int horizontalPadding=24;
+        ax=Math.max(-29999990,ax-horizontalPadding);bx=Math.min(29999990,bx+horizontalPadding);
+        az=Math.max(-29999990,az-horizontalPadding);bz=Math.min(29999990,bz+horizontalPadding);
+        ay=Math.max(1,ay-12);by=Math.min(254,by+12);
         int w=Math.min(128,bx-ax+1),d=Math.min(128,bz-az+1),h=Math.min(96,by-ay+1);
         MinecraftPathWorld out=new MinecraftPathWorld(ax,ay,az,w,h,d);
 
