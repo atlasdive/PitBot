@@ -27,7 +27,7 @@ import java.util.concurrent.*;
 public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
-    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,SEEK,PATROL,TO_CHEST,OPEN,LOOT }
+    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,OPEN,LOOT }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
@@ -37,8 +37,9 @@ public final class GeodeClient {
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
+    private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private int gatePlaneY=GATE.y;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates;
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates,gateEntryTicks;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
@@ -54,9 +55,11 @@ public final class GeodeClient {
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
         collectResult(p);
-        if(stage==Stage.TO_GATE)trackGateCrossing(p);
+        if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         switch(stage){
             case TO_LAUNCH:case TO_GATE:case TO_CHEST:case PATROL:tickRoute(p,w);break;
+            case ENTER_GATE:tickGateEntry(p);break;
+            case WAIT_GATE_LANDING:movement.stop();tickGateLanding(p,w);break;
             case WAIT_LAUNCH:
                 movement.stop();waitTicks++;
                 if(p.posY<launchY-5D||sq(p.posX-launchX)+sq(p.posZ-launchZ)>64D)launchDetected=true;
@@ -148,14 +151,14 @@ public final class GeodeClient {
             stage=Stage.WAIT_LAUNCH;status="At LaunchPad - waiting for launch and landing";
         }else if(stage==Stage.TO_GATE){
             double feet=p.getEntityBoundingBox().minY;
-            if(gateCrossed&&p.onGround&&feet<gatePlaneY-0.25D){
-                stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
-                tell("Iron-bar gap crossed. Sewer reached; searching for chests.");
-                findChest(p,w);
+            if(gateLanding!=null&&gateDropSource!=null){
+                stage=Stage.ENTER_GATE;
+                gateEntryTicks=0;
+                previousGateFeet=feet;
+                status="At gate approach "+gateDropSource+"; stepping into opening "+gateLanding;
             }else{
                 retryTicks=ticks+20;
-                status=gateCrossed?"Gap crossed; waiting for Sewer landing":"Reached route end without verified gap crossing; replanning";
-                gateDropSource=null;gateLanding=null;gateCrossed=false;previousGateFeet=Double.NaN;
+                status="Gate approach target missing; replanning";
             }
         }else if(stage==Stage.TO_CHEST){stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;}
         else if(stage==Stage.PATROL){stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Patrol point reached - scanning again";}
@@ -199,17 +202,18 @@ public final class GeodeClient {
             gateDiagnostics="Y "+planner.minPlaneY()+".."+planner.maxPlaneY()
                     +" | clear "+planner.clearColumns()
                     +" | bars "+planner.framedColumns()
-                    +" | landing "+planner.safeLandingColumns();
+                    +" | approach "+planner.approachColumns();
             if(plan==null){
-                gateColumns.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
+                gateColumns.clear();gateApproachMap.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
                 goalCandidates=0;
-                status="No usable iron-bar gap near "+GATE+"; scan results shown below";
+                status="No iron-bar opening with a safe approach near "+GATE;
                 retryTicks=ticks+40;
                 return;
             }
             gatePlaneY=plan.planeY;
             gateColumns.clear();gateColumns.addAll(plan.columns);
-            goals.addAll(plan.landings);
+            gateApproachMap.clear();gateApproachMap.putAll(plan.approachToAperture);
+            goals.addAll(plan.approaches);
             goalCandidates=goals.size();
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
@@ -244,17 +248,18 @@ public final class GeodeClient {
             expandedNodes=r.expanded;
             if(r.found()){
                 if(stage==Stage.TO_GATE){
-                    GateDrop drop=findGateDrop(r.steps);
-                    if(drop==null){
-                        status="A* found a route, but it does not pass through the iron-bar opening; retrying";
+                    BlockPos approach=r.steps.get(r.steps.size()-1).pos;
+                    BlockPos aperture=gateApproachMap.get(approach);
+                    if(aperture==null){
+                        status="A* reached a cell that is not a gate approach; retrying";
                         retryTicks=ticks+40;
                         return;
                     }
-                    gateDropSource=drop.from;
-                    gateLanding=drop.to;
+                    gateDropSource=approach;
+                    gateLanding=aperture;
                     gateCrossed=false;
                     previousGateFeet=p.getEntityBoundingBox().minY;
-                    status="Path to iron-bar gap ready: "+gateLanding+"; moving through opening";
+                    status="Path to gate approach ready: "+approach+"; opening "+aperture;
                 }else{
                     status=purpose+" path ready ("+r.steps.size()+" steps)";
                 }
@@ -311,41 +316,103 @@ public final class GeodeClient {
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Chest cleared; searching for next";
     }
-    private GateDrop findGateDrop(List<PathStep> steps){
-        for(int i=1;i<steps.size();i++){
-            PathStep from=steps.get(i-1),to=steps.get(i);
-            if(to.kind==MovementKind.DROP&&from.pos.y>=gatePlaneY&&to.pos.y<gatePlaneY
-                    &&gateColumns.contains(new BlockPos(to.pos.x,gatePlaneY,to.pos.z))){
-                return new GateDrop(from.pos,to.pos);
-            }
+    private void tickGateEntry(EntityPlayerSP p){
+        if(gateLanding==null){setGateKeys(false);stage=Stage.TO_GATE;retryTicks=ticks+5;return;}
+        gateEntryTicks++;
+        double targetX=gateLanding.x+0.5D,targetZ=gateLanding.z+0.5D;
+        double dx=targetX-p.posX,dz=targetZ-p.posZ;
+        double distance=Math.sqrt(dx*dx+dz*dz);
+        double feet=p.getEntityBoundingBox().minY;
+
+        if(gateCrossed||feet<gatePlaneY-0.10D){
+            setGateKeys(false);
+            stage=Stage.WAIT_GATE_LANDING;
+            status=gateCrossed?"Iron-bar plane crossed; waiting for landing":"Below gate plane; verifying centered passage";
+            return;
         }
-        return null;
+
+        if(distance<0.16D){
+            setGateKeys(false);
+            status="Aligned with iron-bar opening; waiting to drop";
+            return;
+        }
+
+        float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+        float difference=MathHelper.wrapAngleTo180_float(targetYaw-p.rotationYaw);
+        p.rotationYaw+=MathHelper.clamp_float(difference,-10.0F,10.0F);
+        if(Math.abs(difference)>28.0F){
+            setGateKeys(false);
+        }else{
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),true);
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),false);
+            KeyBinding.setKeyBindState(mc.gameSettings.keyBindSneak.getKeyCode(),false);
+        }
+
+        if(gateEntryTicks>120){
+            setGateKeys(false);
+            stage=Stage.TO_GATE;
+            gateLanding=null;gateDropSource=null;gateCrossed=false;
+            retryTicks=ticks+10;
+            status="Could not enter selected opening; choosing another approach";
+        }
     }
 
     private void trackGateCrossing(EntityPlayerSP p){
-        if(gateLanding==null||gateDropSource==null)return;
+        if(gateLanding==null||gateDropSource==null||gateCrossed)return;
         double feet=p.getEntityBoundingBox().minY;
         if(!Double.isNaN(previousGateFeet)){
-            double crossingY=gatePlaneY+0.5D;
-            boolean fallingThrough=previousGateFeet>crossingY&&feet<=crossingY;
-            boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.38D
-                    &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.38D;
+            boolean fallingThrough=previousGateFeet>=gatePlaneY-0.02D&&feet<gatePlaneY-0.02D;
+            boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.40D
+                    &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.40D;
             if(fallingThrough&&centered){
                 gateCrossed=true;
+                stage=Stage.WAIT_GATE_LANDING;
+                gateEntryTicks=0;
+                setGateKeys(false);
                 status="Iron-bar opening crossed; confirming Sewer landing";
             }
         }
         previousGateFeet=feet;
     }
 
-    private void resetGateState(){
-        gateLanding=null;gateDropSource=null;gateColumns.clear();
-        gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;
+    private void tickGateLanding(EntityPlayerSP p,World w){
+        double feet=p.getEntityBoundingBox().minY;
+        gateEntryTicks++;
+        if(gateCrossed&&p.onGround&&feet<gatePlaneY-0.25D){
+            setGateKeys(false);
+            stage=Stage.SEEK;
+            scanTicks=GeodeConfig.scanIntervalTicks;
+            tell("Iron-bar gap crossed. Sewer reached; searching for existing chests.");
+            findChest(p,w);
+            return;
+        }
+        if(gateEntryTicks>240){
+            setGateKeys(false);
+            status=gateCrossed?"Passed the grate; still waiting for a safe landing":"No verified crossing; retrying the gate approach";
+            if(gateCrossed){
+                // Keep waiting instead of falsely declaring Sewer entry.
+                gateEntryTicks=0;
+            }else{
+                stage=Stage.TO_GATE;
+                gateLanding=null;gateDropSource=null;previousGateFeet=Double.NaN;
+                retryTicks=ticks+10;
+            }
+        }
     }
 
-    private static final class GateDrop{
-        final BlockPos from,to;
-        GateDrop(BlockPos from,BlockPos to){this.from=from;this.to=to;}
+    private void setGateKeys(boolean forward){
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),forward);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindBack.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindLeft.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindRight.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindSneak.getKeyCode(),false);
+    }
+
+    private void resetGateState(){
+        gateLanding=null;gateDropSource=null;gateColumns.clear();gateApproachMap.clear();
+        gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;gateEntryTicks=0;
+        if(mc!=null)setGateKeys(false);
     }
 
     private List<BlockPos> box(int ax,int bx,int ay,int by,int az,int bz){
