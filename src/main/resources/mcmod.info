@@ -1,0 +1,16 @@
+[
+  {
+    "modid": "geode",
+    "name": "Geode",
+    "description": "Standalone Sewer chest navigation assistant for the custom Pit remake.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "updateUrl": "",
+    "authorList": ["atlasdive"],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+  }
+]
