@@ -156,10 +156,29 @@ public class PathfinderTest {
         }
     }
 
+    @Test public void patrolPlannerUsesAProperExpandingSquareSpiral(){
+        BlockPos origin=new BlockPos(47,66,75);
+        assertEquals(new BlockPos(47,66,67),PatrolPlanner.waypoint(origin,0,66));
+        assertEquals(new BlockPos(55,66,67),PatrolPlanner.waypoint(origin,1,66));
+        assertEquals(new BlockPos(55,66,83),PatrolPlanner.waypoint(origin,2,66));
+        assertEquals(new BlockPos(39,66,83),PatrolPlanner.waypoint(origin,3,66));
+        assertEquals(new BlockPos(39,66,59),PatrolPlanner.waypoint(origin,4,66));
+    }
+
     @Test public void patrolPlannerCanStopAtTheChestScanBoundary(){
         BlockPos center=new BlockPos(47,66,75);
-        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(50,66,90),center,32));
-        assertFalse(PatrolPlanner.insideHorizontalRadius(new BlockPos(90,66,90),center,32));
+        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(50,66,90),center,64));
+        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(87,66,75),center,64));
+        assertFalse(PatrolPlanner.insideHorizontalRadius(new BlockPos(112,66,75),center,64));
+    }
+
+    @Test public void chestApproachPlannerSearchesMultipleSidesAndHeights(){
+        BlockPos chest=new BlockPos(20,69,75);
+        java.util.List<BlockPos> candidates=ChestApproachPlanner.candidates(chest,3,3);
+        assertEquals(196,candidates.size());
+        assertFalse("the chest block itself must never be a standing goal",candidates.contains(chest));
+        assertTrue(candidates.contains(chest.add(3,3,0)));
+        assertTrue(candidates.contains(chest.add(-2,-3,1)));
     }
 
     @Test public void supportsStraightDownDropThroughOneBlockOpening(){
