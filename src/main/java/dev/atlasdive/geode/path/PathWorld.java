@@ -8,4 +8,7 @@ public interface PathWorld {
     boolean liquid(BlockPos pos);
     double extraCost(BlockPos pos);
     boolean jumpArcClear(BlockPos from, BlockPos to);
+
+    /** True only when the player's full standing footprint can travel horizontally between two same-level nodes. */
+    boolean lineClear(BlockPos from, BlockPos to);
 }
