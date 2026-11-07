@@ -79,6 +79,33 @@ public class PathfinderTest {
         assertTrue(gate.columns.contains(new BlockPos(0,5,0)));
     }
 
+    @Test public void gatePlannerAcceptsGenericSolidFrameNotJustIronBars(){
+        TestWorld world=new TestWorld();
+        world.support.clear();
+        world.support.add(new BlockPos(1,5,0));
+        world.support.add(new BlockPos(1,6,0));
+        // These represent solid decorative blocks from a remake map, not iron bars.
+        world.solid.add(new BlockPos(-1,4,0));
+        world.solid.add(new BlockPos(1,4,0));
+
+        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(1,6,0),1,8);
+        assertNotNull("a two-sided opening framed by solid blocks should be detected",gate);
+        assertTrue(gate.approaches.contains(new BlockPos(1,5,0)));
+    }
+
+    @Test public void gatePlannerSearchesBeyondFourBlocks(){
+        TestWorld world=new TestWorld();
+        world.support.clear();
+        world.support.add(new BlockPos(9,5,0));
+        world.support.add(new BlockPos(9,6,0));
+        world.solid.add(new BlockPos(7,4,0));
+        world.solid.add(new BlockPos(9,4,0));
+
+        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(9,6,0),12,8);
+        assertNotNull("opening at X=8 should be found from a marker at X=0 with radius 12",gate);
+        assertTrue(gate.approaches.contains(new BlockPos(9,5,0)));
+    }
+
     @Test public void gatePlannerRejectsAnUnframedOrBlockedColumn(){
         TestWorld world=new TestWorld();
         world.support.clear();
@@ -111,6 +138,7 @@ public class PathfinderTest {
     private static final class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         final Set<BlockPos> iron=new HashSet<BlockPos>();
+        final Set<BlockPos> solid=new HashSet<BlockPos>();
         final Set<BlockPos> blocked=new HashSet<BlockPos>();
         TestWorld(){for(int x=-2;x<=10;x++)for(int z=-2;z<=10;z++)support.add(new BlockPos(x,1,z));}
         public boolean canStand(BlockPos p){return p.y>=0&&p.y<8&&support.contains(p)&&!blocked.contains(p);}
@@ -118,7 +146,7 @@ public class PathfinderTest {
         public boolean hazard(BlockPos p){return false;}
         public boolean climbable(BlockPos p){return false;}
         public boolean liquid(BlockPos p){return false;}
-        public boolean ironBars(BlockPos p){return iron.contains(p);}
+        public boolean gateBarrier(BlockPos p){return iron.contains(p)||solid.contains(p);}
         public double extraCost(BlockPos p){return 0D;}
         public boolean jumpArcClear(BlockPos a,BlockPos b){return true;}
         public boolean lineClear(BlockPos a,BlockPos b){return a.y==b.y&&clear(a)&&clear(b);}
