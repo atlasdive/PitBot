@@ -119,10 +119,10 @@ public final class GeodeClient {
         else if(stage==Stage.TO_CHEST&&chest!=null)routeChest(p,w,chest);
         else if(stage==Stage.PATROL)routePatrol(p,w);
     }
-    private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(14,18,94,96,14,18),"LaunchPad");}
+    private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
     private void routeGate(EntityPlayerSP p,World w){
-        // Narrow search band around the supplied iron-bar gap. Collision geometry decides the exact passable cells.
-        route(p,w,box(45,49,54,65,73,77),"Sewer opening");
+        // Prefer the supplied gap column; only widen if no collision-safe landing exists there.
+        route(p,w,box(47,47,46,65,75,75),"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
         route(p,w,Arrays.asList(c.add(1,0,0),c.add(-1,0,0),c.add(0,0,1),c.add(0,0,-1),
@@ -139,10 +139,17 @@ public final class GeodeClient {
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
         List<BlockPos> goals=new ArrayList<BlockPos>();
         for(BlockPos g:rough)if(snap.canStand(g))goals.add(g);
+        if(goals.isEmpty()&&"LaunchPad".equals(why)){
+            for(int x=LAUNCH.x-1;x<=LAUNCH.x+1;x++)for(int y=LAUNCH.y-1;y<=LAUNCH.y+2;y++)
+                for(int z=LAUNCH.z-1;z<=LAUNCH.z+1;z++){
+                    BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
+                }
+        }
         if(goals.isEmpty()&&"Sewer opening".equals(why)){
-            for(int x=GATE.x-3;x<=GATE.x+3;x++)for(int y=GATE.y-16;y<=GATE.y-1;y++)for(int z=GATE.z-3;z<=GATE.z+3;z++){
-                BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
-            }
+            for(int x=GATE.x-3;x<=GATE.x+3;x++)for(int y=GATE.y-28;y<=GATE.y-1;y++)
+                for(int z=GATE.z-3;z<=GATE.z+3;z++){
+                    BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
+                }
         }
         if(goals.isEmpty()){status="Waiting for target chunks to load: "+why;retryTicks=ticks+40;return;}
         purpose=why;status="Computing "+why+" path...";
