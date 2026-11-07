@@ -26,6 +26,7 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 ## Pathfinding
 
 - 3D A* with multiple goal positions and a default budget of 120,000 expanded nodes.
+- Half-block vertical path nodes derived from real collision-box tops, allowing stairs and slab-height treads to be used as intermediate and final standing positions.
 - Distant chest routes and patrol legs are split into 56-block segments, keeping each collision snapshot bounded without imposing a finite exploration radius.
 - Collision snapshot is captured on the client thread with a 24-block horizontal margin around the target region; A* runs on a background worker.
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.

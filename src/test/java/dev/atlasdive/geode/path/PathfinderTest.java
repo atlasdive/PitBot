@@ -256,7 +256,48 @@ public class PathfinderTest {
         assertEquals(0.0D,result.steps.get(1).cost,0.0001D);
     }
 
-    private static final class TestWorld implements PathWorld {
+
+    @Test public void pathfinderClimbsAndDescendsHalfBlockStairSteps(){
+        StairWorld world=new StairWorld();
+        PathNode lower=new PathNode(0,2,0);
+        PathNode middle=new PathNode(1,3,0);
+        PathNode upper=new PathNode(2,4,0);
+        PathResult up=new Pathfinder().findNodes(world,lower,java.util.Collections.singletonList(upper),1000,8);
+        assertTrue("A* should route through the half-block stair tread",up.found());
+        assertEquals(3,up.steps.size());
+        assertEquals(middle,up.steps.get(1).node);
+        assertEquals(MovementKind.STEP_UP,up.steps.get(1).kind);
+        assertEquals(upper,up.steps.get(2).node);
+        assertEquals(MovementKind.STEP_UP,up.steps.get(2).kind);
+        PathResult down=new Pathfinder().findNodes(world,upper,java.util.Collections.singletonList(lower),1000,8);
+        assertTrue("A* should descend the same stair treads",down.found());
+        assertEquals(3,down.steps.size());
+        assertEquals(middle,down.steps.get(1).node);
+        assertEquals(MovementKind.STEP_DOWN,down.steps.get(1).kind);
+        assertEquals(lower,down.steps.get(2).node);
+        assertEquals(MovementKind.STEP_DOWN,down.steps.get(2).kind);
+    }
+
+    @Test public void pathStepPreservesHalfBlockFeetHeight(){
+        PathStep step=new PathStep(new PathNode(4,133,7),MovementKind.STEP_UP,1.2D);
+        assertEquals(66.5D,step.feetY,0.0001D);
+        assertEquals(new BlockPos(4,66,7),step.pos);
+    }
+
+    private static final class StairWorld extends TestWorld {
+        final Set<PathNode> stands=new HashSet<PathNode>();
+        StairWorld(){
+            stands.add(new PathNode(0,2,0));stands.add(new PathNode(1,3,0));stands.add(new PathNode(2,4,0));
+        }
+        @Override public boolean canStand(PathNode p){return stands.contains(p);}
+        @Override public boolean clear(PathNode p){return true;}
+        @Override public boolean hazard(PathNode p){return false;}
+        @Override public double extraCost(PathNode p){return 0D;}
+        @Override public boolean jumpArcClear(PathNode a,PathNode b){return true;}
+        @Override public boolean lineClear(PathNode a,PathNode b){return a.y2==b.y2;}
+    }
+
+    private static class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         final Set<BlockPos> iron=new HashSet<BlockPos>();
         final Set<BlockPos> solid=new HashSet<BlockPos>();

@@ -135,8 +135,8 @@ public final class GeodeClient {
             else if(b.kind==MovementKind.JUMP||b.kind==MovementKind.STEP_UP)GL11.glColor4f(0.95F,0.85F,0.20F,0.95F);
             else GL11.glColor4f(0.20F,0.85F,1.0F,0.90F);
             GL11.glBegin(GL11.GL_LINES);
-            GL11.glVertex3d(a.pos.x+0.5D-rm.viewerPosX,a.pos.y+0.08D-rm.viewerPosY,a.pos.z+0.5D-rm.viewerPosZ);
-            GL11.glVertex3d(b.pos.x+0.5D-rm.viewerPosX,b.pos.y+0.08D-rm.viewerPosY,b.pos.z+0.5D-rm.viewerPosZ);
+            GL11.glVertex3d(a.pos.x+0.5D-rm.viewerPosX,a.feetY+0.08D-rm.viewerPosY,a.pos.z+0.5D-rm.viewerPosZ);
+            GL11.glVertex3d(b.pos.x+0.5D-rm.viewerPosX,b.feetY+0.08D-rm.viewerPosY,b.pos.z+0.5D-rm.viewerPosZ);
             GL11.glEnd();
         }
         GL11.glDepthMask(true);
@@ -307,9 +307,13 @@ public final class GeodeClient {
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
         if(future!=null)future.cancel(true);movement.stop();
         BlockPos start=playerPos(p);
+        PathNode startNode=PathNode.atFeet(start.x,p.getEntityBoundingBox().minY,start.z);
         lastStart=start;
-        MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
+        List<PathNode> captureGoals=new ArrayList<PathNode>();
+        for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
+        MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,startNode,captureGoals);
         List<BlockPos> goals=new ArrayList<BlockPos>();
+        List<PathNode> pathGoals=new ArrayList<PathNode>();
         if("Sewer opening".equals(why)){
             GatePlanner planner=new GatePlanner();
             GatePlan plan=planner.find(snap,GATE,start,GeodeConfig.gateScanRadius,GeodeConfig.maxFallBlocks);
@@ -328,34 +332,42 @@ public final class GeodeClient {
             gateColumns.clear();gateColumns.addAll(plan.columns);
             gateApproachMap.clear();gateApproachMap.putAll(plan.approachToAperture);
             for(BlockPos approach:plan.approaches){
-                if(!failedGateApproaches.contains(approach))goals.add(approach);
+                if(!failedGateApproaches.contains(approach)&&snap.canStand(approach)){
+                    goals.add(approach);pathGoals.add(PathNode.fromBlockPos(approach));
+                }
             }
             if(goals.isEmpty()){
                 failedGateApproaches.clear();
-                goals.addAll(plan.approaches);
+                for(BlockPos approach:plan.approaches)if(snap.canStand(approach)){
+                    goals.add(approach);pathGoals.add(PathNode.fromBlockPos(approach));
+                }
             }
-            goalCandidates=goals.size();
+            goalCandidates=pathGoals.size();
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
         }else{
             for(BlockPos g:rough){
-                if(!snap.canStand(g))continue;
                 if("Sewer patrol".equals(why)){
                     long dx=(long)g.x-start.x,dz=(long)g.z-start.z;
                     // Never accept the player's current cell or a nearby cell as a
                     // patrol destination; that creates zero-distance patrol loops.
                     if(dx*dx+dz*dz<25L)continue;
                 }
-                goals.add(g);
+                if(snap.canStand(g)){goals.add(g);pathGoals.add(PathNode.fromBlockPos(g));}
+                PathNode halfLevel=new PathNode(g.x,g.y*2+1,g.z);
+                if(snap.canStand(halfLevel)){goals.add(halfLevel.blockPos());pathGoals.add(halfLevel);}
             }
         }
         if(goals.isEmpty()&&"LaunchPad".equals(why)){
             for(int x=LAUNCH.x-1;x<=LAUNCH.x+1;x++)for(int y=LAUNCH.y-1;y<=LAUNCH.y+2;y++)
                 for(int z=LAUNCH.z-1;z<=LAUNCH.z+1;z++){
-                    BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
+                    BlockPos g=new BlockPos(x,y,z);
+                    if(snap.canStand(g)){goals.add(g);pathGoals.add(PathNode.fromBlockPos(g));}
+                    PathNode halfLevel=new PathNode(x,y*2+1,z);
+                    if(snap.canStand(halfLevel)){goals.add(halfLevel.blockPos());pathGoals.add(halfLevel);}
                 }
         }
-        goalCandidates=goals.size();
+        goalCandidates=pathGoals.size();
         if(goals.isEmpty()){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("No loaded standable cells at this patrol waypoint");
@@ -372,7 +384,7 @@ public final class GeodeClient {
             }
             return;
         }
-        if(!snap.canStand(start)){
+        if(!snap.canStand(startNode)){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("Patrol start cell is not standable");
             }else if("chest scaffold staging".equals(why)&&chest!=null){
@@ -384,7 +396,7 @@ public final class GeodeClient {
             return;
         }
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
-        future=worker.submit(()->new Pathfinder().find(snap,start,goals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        future=worker.submit(()->new Pathfinder().findNodes(snap,startNode,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
     }
     private void collectResult(EntityPlayerSP p){
         if(future==null||!future.isDone())return;

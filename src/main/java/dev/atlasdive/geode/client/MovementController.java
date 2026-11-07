@@ -51,13 +51,13 @@ public final class MovementController {
             dx=step.pos.x+.5D-player.posX;
             dz=step.pos.z+.5D-player.posZ;
             distance=Math.sqrt(dx*dx+dz*dz);
-            vertical=step.pos.y-feet;
+            vertical=step.feetY-feet;
 
             if(step.kind==MovementKind.DROP){
                 if(distance<=DROP_ALIGNMENT){
                     // Do not keep walking while gravity carries the player through the opening.
                     releaseForwardAndJump();
-                    if(feet<=step.pos.y+.45D&&player.onGround){
+                    if(feet<=step.feetY+.45D&&player.onGround){
                         advance();
                         continue;
                     }
@@ -84,7 +84,7 @@ public final class MovementController {
                 }
             }
 
-            if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<.75D){
+            if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<.35D){
                 advance();
                 continue;
             }
@@ -96,7 +96,7 @@ public final class MovementController {
         dx=step.pos.x+.5D-player.posX;
         dz=step.pos.z+.5D-player.posZ;
         distance=Math.sqrt(dx*dx+dz*dz);
-        vertical=step.pos.y-feet;
+        vertical=step.feetY-feet;
 
         if(distance>.08D){
             float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
@@ -109,7 +109,7 @@ public final class MovementController {
                 setJump(false);
             }else{
                 setForward(true);
-                boolean jump=(step.kind==MovementKind.STEP_UP||step.kind==MovementKind.JUMP)
+                boolean jump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)||step.kind==MovementKind.JUMP)
                         &&player.onGround&&distance<2.5D;
                 setJump(jump);
             }

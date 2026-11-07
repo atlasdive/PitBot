@@ -1,16 +1,18 @@
 package dev.atlasdive.geode.path;
-
 import java.util.*;
-
 public final class Pathfinder {
     private static final double EPS=1.0E-8D;
-
     public PathResult find(PathWorld world,BlockPos start,List<BlockPos> goals,int maxNodes,int maxFall){
+        List<PathNode> nodes=new ArrayList<PathNode>(goals.size());
+        for(BlockPos goal:goals)nodes.add(PathNode.fromBlockPos(goal));
+        return findNodes(world,PathNode.fromBlockPos(start),nodes,maxNodes,maxFall);
+    }
+    public PathResult findNodes(PathWorld world,PathNode start,List<PathNode> goals,int maxNodes,int maxFall){
         if(world==null||start==null||goals==null||goals.isEmpty()||!world.canStand(start))
             return new PathResult(Collections.<PathStep>emptyList(),0);
-        Set<BlockPos> targets=new HashSet<BlockPos>(goals);
-        Map<BlockPos,Double> best=new HashMap<BlockPos,Double>();
-        Map<BlockPos,Parent> parents=new HashMap<BlockPos,Parent>();
+        Set<PathNode> targets=new HashSet<PathNode>(goals);
+        Map<PathNode,Double> best=new HashMap<PathNode,Double>();
+        Map<PathNode,Parent> parents=new HashMap<PathNode,Parent>();
         PriorityQueue<Entry> open=new PriorityQueue<Entry>(64,new Comparator<Entry>(){
             public int compare(Entry a,Entry b){return Double.compare(a.f,b.f);}
         });
@@ -21,62 +23,47 @@ public final class Pathfinder {
             if(known==null||cur.g>known+EPS)continue;
             if(targets.contains(cur.pos))return build(cur.pos,parents,best,expanded,world);
             expanded++;
-
             if(world.climbable(cur.pos)||world.liquid(cur.pos)){
                 MovementKind verticalKind=world.climbable(cur.pos)?MovementKind.CLIMB:MovementKind.SWIM;
-                addVertical(world,cur.pos,1,verticalKind,cur.g,goals,best,parents,open);
-                addVertical(world,cur.pos,-1,verticalKind,cur.g,goals,best,parents,open);
+                addVertical(world,cur.pos,2,verticalKind,cur.g,goals,best,parents,open);
+                addVertical(world,cur.pos,-2,verticalKind,cur.g,goals,best,parents,open);
             }
-
-            // A one-block opening may be directly below the player (for example the
-            // Sewer iron-bar gap). Permit a pure vertical gravity drop without requiring
-            // an artificial horizontal step first.
-            for(int dy=-1;dy>=-maxFall;dy--){
-                BlockPos landing=cur.pos.add(0,dy,0);
-                if(!world.canStand(landing)||world.hazard(landing))continue;
-                if(!dropArcClear(world,cur.pos,landing,0,0))continue;
+            for(int dyHalf=-2;dyHalf>=-maxFall*2;dyHalf--){
+                PathNode landing=cur.pos.add(0,dyHalf,0);
+                if(!world.canStand(landing)||world.hazard(landing)||!dropArcClear(world,cur.pos,landing,0,0))continue;
                 relax(landing,MovementKind.DROP,cur.pos,
                         cur.g+Math.max(0.0D,world.extraCost(landing)),goals,best,parents,open);
             }
-
             for(int[] d:DIRS){
                 boolean diagonal=d[0]!=0&&d[1]!=0;
-                boolean cornerClear=!diagonal||
-                        (world.clear(cur.pos.add(d[0],0,0))&&world.clear(cur.pos.add(0,0,d[1])));
+                boolean cornerClear=!diagonal||(world.clear(cur.pos.add(d[0],0,0))&&world.clear(cur.pos.add(0,0,d[1])));
                 if(!cornerClear)continue;
-
-                // Keep every safe landing at this horizontal offset. Considering only the
-                // first support surface can hide a much faster drop to a lower platform.
-                for(int dy=1;dy>=-maxFall;dy--){
-                    BlockPos next=cur.pos.add(d[0],dy,d[1]);
+                for(int dyHalf=2;dyHalf>=-maxFall*2;dyHalf--){
+                    PathNode next=cur.pos.add(d[0],dyHalf,d[1]);
                     if(!world.canStand(next)||world.hazard(next))continue;
                     MovementKind kind;
-                    if(dy>0){
+                    if(dyHalf>0){
                         kind=MovementKind.STEP_UP;
-                        if(!world.jumpArcClear(cur.pos,next))continue;
-                    }else if(dy<0){
+                        if(dyHalf>1&&!world.jumpArcClear(cur.pos,next))continue;
+                    }else if(dyHalf==-1)kind=MovementKind.STEP_DOWN;
+                    else if(dyHalf<0){
                         kind=MovementKind.DROP;
                         if(!dropArcClear(world,cur.pos,next,d[0],d[1]))continue;
                     }else if(world.liquid(next))kind=MovementKind.SWIM;
                     else if(world.climbable(next))kind=MovementKind.CLIMB;
                     else kind=MovementKind.WALK;
-
                     double horizontal=Math.sqrt(d[0]*d[0]+d[1]*d[1]);
-                    double vertical=Math.abs(dy);
+                    double vertical=Math.abs(dyHalf)*0.5D;
                     double stepCost=horizontal;
-                    if(kind==MovementKind.DROP) {
-                        // Falls have no damage/risk surcharge in this remake.
-                    } else if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
+                    if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
                     else if(kind==MovementKind.SWIM)stepCost+=2.0D;
                     else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
                     relax(next,kind,cur.pos,cur.g+stepCost+Math.max(0.0D,world.extraCost(next)),
                             goals,best,parents,open);
                 }
-
-                // A two-block horizontal gap can be jumped only after a full arc check.
-                BlockPos jump=cur.pos.add(d[0]*2,0,d[1]*2);
+                PathNode jump=cur.pos.add(d[0]*2,0,d[1]*2);
                 if(world.canStand(jump)&&!world.hazard(jump)&&world.jumpArcClear(cur.pos,jump)){
-                    double cost=2.0D* Math.sqrt(d[0]*d[0]+d[1]*d[1])+2.0D
+                    double cost=2.0D*Math.sqrt(d[0]*d[0]+d[1]*d[1])+2.0D
                             +Math.max(0.0D,world.extraCost(jump));
                     relax(jump,MovementKind.JUMP,cur.pos,cur.g+cost,goals,best,parents,open);
                 }
@@ -85,77 +72,60 @@ public final class Pathfinder {
         }
         return new PathResult(Collections.<PathStep>emptyList(),expanded);
     }
-
-    private static void addVertical(PathWorld world,BlockPos from,int dy,MovementKind kind,double base,
-                                    List<BlockPos> goals,Map<BlockPos,Double> best,Map<BlockPos,Parent> parents,
-                                    PriorityQueue<Entry> open){
-        BlockPos to=from.add(0,dy,0);
+    private static void addVertical(PathWorld world,PathNode from,int dyHalf,MovementKind kind,double base,
+            List<PathNode> goals,Map<PathNode,Double> best,Map<PathNode,Parent> parents,PriorityQueue<Entry> open){
+        PathNode to=from.add(0,dyHalf,0);
         if(world.canStand(to)&&!world.hazard(to)&&(world.climbable(to)||world.liquid(to)))
             relax(to,kind,from,base+1.2D+Math.max(0.0D,world.extraCost(to)),goals,best,parents,open);
     }
-
-    private static void relax(BlockPos next,MovementKind kind,BlockPos from,double g,List<BlockPos> goals,
-                              Map<BlockPos,Double> best,Map<BlockPos,Parent> parents,PriorityQueue<Entry> open){
+    private static void relax(PathNode next,MovementKind kind,PathNode from,double g,List<PathNode> goals,
+            Map<PathNode,Double> best,Map<PathNode,Parent> parents,PriorityQueue<Entry> open){
         Double old=best.get(next);
         if(old==null||g+EPS<old){
             best.put(next,g);parents.put(next,new Parent(from,kind));
             open.add(new Entry(next,g,heuristic(next,goals)));
         }
     }
-
-    private static boolean dropArcClear(PathWorld world,BlockPos from,BlockPos landing,int dx,int dz){
-        int drop=from.y-landing.y;
-        for(int y=1;y<drop;y++){
-            BlockPos air=new BlockPos(from.x+dx,from.y-y,from.z+dz);
-            if(!world.clear(air)||!world.clear(air.add(0,1,0))||world.hazard(air))return false;
+    private static boolean dropArcClear(PathWorld world,PathNode from,PathNode landing,int dx,int dz){
+        for(int y2=from.y2-1;y2>landing.y2;y2--){
+            PathNode air=new PathNode(from.x+dx,y2,from.z+dz);
+            if(!world.clear(air)||world.hazard(air))return false;
         }
         return true;
     }
-
-    private static PathResult build(BlockPos end,Map<BlockPos,Parent> parents,Map<BlockPos,Double> costs,
-                                    int expanded,PathWorld world){
-        List<PathStep> raw=new ArrayList<PathStep>();BlockPos p=end;
+    private static PathResult build(PathNode end,Map<PathNode,Parent> parents,Map<PathNode,Double> costs,
+            int expanded,PathWorld world){
+        List<PathStep> raw=new ArrayList<PathStep>();PathNode p=end;
         while(p!=null){
             Parent parent=parents.get(p);
-            raw.add(new PathStep(p,parent==null?MovementKind.WALK:parent.kind,
-                    costs.containsKey(p)?costs.get(p):0.0D));
+            raw.add(new PathStep(p,parent==null?MovementKind.WALK:parent.kind,costs.containsKey(p)?costs.get(p):0.0D));
             p=parent==null?null:parent.pos;
         }
-        Collections.reverse(raw);
-        return new PathResult(smooth(raw,world),expanded);
+        Collections.reverse(raw);return new PathResult(smooth(raw,world),expanded);
     }
-
-    /** String-pull only same-height WALK chains; never smooth across jumps or drops. */
     private static List<PathStep> smooth(List<PathStep> raw,PathWorld world){
         if(raw.size()<3)return raw;
-        List<PathStep> out=new ArrayList<PathStep>();
-        int anchor=0;
-        out.add(raw.get(0));
+        List<PathStep> out=new ArrayList<PathStep>();int anchor=0;out.add(raw.get(0));
         while(anchor<raw.size()-1){
             int chosen=anchor+1;
             for(int candidate=raw.size()-1;candidate>anchor+1;candidate--){
                 boolean normalWalk=true;
                 for(int k=anchor+1;k<=candidate;k++){
                     PathStep step=raw.get(k);
-                    if(step.kind!=MovementKind.WALK||step.pos.y!=raw.get(anchor).pos.y){
-                        normalWalk=false;break;
-                    }
+                    if(step.kind!=MovementKind.WALK||step.node.y2!=raw.get(anchor).node.y2){normalWalk=false;break;}
                 }
-                if(normalWalk&&world.lineClear(raw.get(anchor).pos,raw.get(candidate).pos)){
-                    chosen=candidate;break;
-                }
+                if(normalWalk&&world.lineClear(raw.get(anchor).node,raw.get(candidate).node)){chosen=candidate;break;}
             }
-            out.add(raw.get(chosen));
-            anchor=chosen;
+            out.add(raw.get(chosen));anchor=chosen;
         }
         return out;
     }
-    private static double heuristic(BlockPos p,List<BlockPos> goals){
+    private static double heuristic(PathNode p,List<PathNode> goals){
         double best=Double.POSITIVE_INFINITY;
-        for(BlockPos g:goals){double dx=g.x-p.x,dz=g.z-p.z;best=Math.min(best,Math.sqrt(dx*dx+dz*dz));}
+        for(PathNode g:goals){double dx=g.x-p.x,dz=g.z-p.z;best=Math.min(best,Math.sqrt(dx*dx+dz*dz));}
         return best;
     }
     private static final int[][] DIRS={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
-    private static final class Parent{final BlockPos pos;final MovementKind kind;Parent(BlockPos p,MovementKind k){pos=p;kind=k;}}
-    private static final class Entry{final BlockPos pos;final double g,f;Entry(BlockPos p,double g,double h){pos=p;this.g=g;f=g+h;}}
+    private static final class Parent{final PathNode pos;final MovementKind kind;Parent(PathNode p,MovementKind k){pos=p;kind=k;}}
+    private static final class Entry{final PathNode pos;final double g,f;Entry(PathNode p,double g,double h){pos=p;this.g=g;f=g+h;}}
 }
