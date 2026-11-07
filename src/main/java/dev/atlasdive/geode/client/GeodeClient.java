@@ -8,7 +8,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.gui.inventory.GuiChest;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.inventory.ContainerChest;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntityChest;
@@ -755,7 +754,7 @@ public final class GeodeClient {
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
-        if(mc.currentScreen instanceof GuiChest&&p.openContainer instanceof ContainerChest){
+        if(mc.currentScreen instanceof GuiChest){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
@@ -765,7 +764,7 @@ public final class GeodeClient {
         mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
     }
     private void lootChest(EntityPlayerSP p){
-        if(!(mc.currentScreen instanceof GuiChest)||!(p.openContainer instanceof ContainerChest)){
+        if(!(mc.currentScreen instanceof GuiChest)){
             finish(false);
             return;
         }
