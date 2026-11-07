@@ -46,8 +46,8 @@ jobs:
           java -version
           gradle --version
 
-      - name: Prepare Forge 1.8.9 workspace
-        run: gradle --no-daemon setupDecompWorkspace --stacktrace
+      - name: Prepare Forge 1.8.9 CI workspace (no game assets)
+        run: gradle --no-daemon setupCIWorkspace --stacktrace
 
       - name: Run unit tests and build mod
         run: gradle --no-daemon test build --stacktrace
