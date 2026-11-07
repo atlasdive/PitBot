@@ -1,32 +1,35 @@
 package dev.atlasdive.geode.path;
 
-/** Generates a non-repeating square-spiral route for incrementally exploring loaded chunks. */
+/** Generates a non-repeating square spiral for unbounded chunk exploration. */
 public final class PatrolPlanner {
+    private static final long WORLD_LIMIT=29999900L;
+
     private PatrolPlanner() {}
 
     /**
      * Returns the waypoint for a zero-based patrol leg.
      * Leg lengths grow every two turns: 8, 8, 16, 16, 24, 24, ...
+     * The arithmetic-series calculation is O(1), even for very distant legs.
      */
     public static BlockPos waypoint(BlockPos origin,int leg,int y) {
         if(origin==null)throw new IllegalArgumentException("origin cannot be null");
         if(leg<0)throw new IllegalArgumentException("leg must be non-negative");
-        int x=origin.x,z=origin.z;
-        for(int i=0;i<=leg;i++){
-            int distance=8+(i/2)*8;
-            switch(i&3){
-                case 0: z-=distance; break; // north
-                case 1: x+=distance; break; // east
-                case 2: z+=distance; break; // south
-                default: x-=distance; break; // west
-            }
-        }
-        return new BlockPos(x,y,z);
+
+        long north=leg/4L+1L;
+        long east=leg>=1?(leg-1L)/4L+1L:0L;
+        long south=leg>=2?(leg-2L)/4L+1L:0L;
+        long west=leg>=3?(leg-3L)/4L+1L:0L;
+
+        long x=seriesSum(8L,16L,east)-seriesSum(16L,16L,west);
+        long z=seriesSum(16L,16L,south)-seriesSum(8L,16L,north);
+        return new BlockPos(toWorldCoordinate(origin.x+x),y,toWorldCoordinate(origin.z+z));
     }
 
-    public static boolean insideHorizontalRadius(BlockPos point,BlockPos center,int radius) {
-        if(point==null||center==null||radius<0)return false;
-        long dx=(long)point.x-center.x,dz=(long)point.z-center.z;
-        return dx*dx+dz*dz<=(long)radius*radius;
+    private static long seriesSum(long first,long step,long count) {
+        return count*first+step*count*(count-1L)/2L;
+    }
+
+    private static int toWorldCoordinate(long value) {
+        return (int)Math.max(-WORLD_LIMIT,Math.min(WORLD_LIMIT,value));
     }
 }

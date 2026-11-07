@@ -16,25 +16,25 @@ Press **G** to start or stop Geode.
 3. Scan within the configurable gate radius (default 12 blocks) around `(47, 66, 75)` for an opening in a framed floor/railing structure. Detection recognizes iron bars, panes, fences, walls, and opaque solid frame blocks rather than relying on one exact block ID.
 4. Find supported standing cells within four horizontal blocks of each opening, provided there is a clear player-width approach corridor. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
 5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
-6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
+6. Only after the crossing is verified and the player lands below the grate does Geode scan every chest tile entity in client-loaded chunks. There is no horizontal scan-radius or Y-level cutoff. A chest is treated as a Sewer Chest only when a particle position has been observed within 3 blocks of it during the last 100 client ticks.
 7. For distant chests, pathfind in A* segments of at most 56 horizontal blocks; once nearby, search up to 196 standing-position candidates around the chest. Open it, shift-click its contents into the player's inventory, then continue scanning.
-8. If no chest is found after several scans, follow a non-repeating expanding square-spiral around the Sewer scan center to load new chunks. Patrol destinations must be at least five blocks from the current player cell, and blocked/unloaded destinations are skipped rather than retried forever.
+8. If no particle-marked chest is found after several scans, follow a non-repeating expanding square spiral around the Sewer scan center with no configured distance limit. Long legs are split into 56-block A* segments. Patrol destinations must be at least five blocks from the current player cell, and blocked/unloaded destinations are skipped with a short backoff.
 
 The chat message `SEWER! A new treasure spawned somewhere!` is only an optional early scan trigger. Geode also scans periodically, so a chest that existed before the message appeared can still be found.
 
 ## Pathfinding
 
 - 3D A* with multiple goal positions and a default budget of 120,000 expanded nodes.
-- Distant chest routes are split into 56-block segments, keeping each collision snapshot bounded while allowing the full 150-block detection radius to be traversed.
+- Distant chest routes and patrol legs are split into 56-block segments, keeping each collision snapshot bounded without imposing a finite exploration radius.
 - Collision snapshot is captured on the client thread with a 24-block horizontal margin around the target region; A* runs on a background worker.
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
 - A dedicated GatePlanner detects openings using generic collision barriers and their supported approach cells; it does not require a landing directly underneath the opening.
 - The movement controller steps from the chosen approach into the hole and requires a runtime downward-crossing check at the grate plane before Sewer entry.
-- When no loaded chest is found, patrol uses an expanding square spiral (8, 8, 16, 16, 24, 24, ... block legs) centered on the Sewer scan area. The default scan radius is 150 blocks, and it does not wrap back to an eight-point ring.
+- When no particle-marked loaded chest is found, patrol uses an expanding square spiral (8, 8, 16, 16, 24, 24, ... block legs) centered on the Sewer area. The spiral has no configured horizontal radius limit and computes distant waypoints in constant time.
 - Patrol skips nearby/current cells, advances past unreachable waypoints, and stops when it reaches the configured chest scan boundary.
-- The HUD displays the detected gap, grate height, crossing verification, current patrol leg/waypoint, active 150-block chest scan radius, loaded/in-range/excluded chest counts, current state, target chest, and expanded A* node count.
+- The HUD displays the detected gap, grate height, crossing verification, patrol leg/waypoint, active particle count, recent particle positions, loaded/particle-marked/unmarked/excluded chest counts, current state, target chest, and expanded A* node count.
 - The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
 
 ## Server allowlist
@@ -56,7 +56,8 @@ The JAR should be written to `build/libs/Geode-0.1.0.jar`.
 
 ## Important limitations
 
-- Chest detection is limited to tile entities in chunks currently loaded by the client. The default circular horizontal scan radius is 150 blocks from the Sewer center (the previous generated defaults of 32/64 are migrated to 150); Geode scans while travelling along its patrol spiral as well as at each waypoint. It cannot inspect unloaded chunks remotely.
+- Chest detection is limited to tile entities in chunks currently loaded by the client, but has no configured horizontal distance limit. Geode explores farther areas by travelling its expanding spiral and loading chunks along the way; it cannot inspect unloaded chunks remotely. A chest is accepted only when a particle has been seen within the configured 3-block radius during the previous 100 client ticks. This checks all particle types, so unrelated particle effects near an ordinary chest can cause a false positive.
+- Particle matching is type-agnostic: any active client particle can mark a nearby chest. The `particleProximityRadius` and `particleMemoryTicks` settings in `config/geode.cfg` can be adjusted if the marker effect uses a different distance or interval.
 - The chat announcement contains no chest coordinates.
 - The gate detector searches within `gateScanRadius` (default 12 blocks) and scans down from the player's current feet layer through the configured maximum fall distance. It recognizes iron bars, panes, fences, walls, and opaque blocks around the opening. If the opening is outside the search region or its surrounding blocks do not create a detectable frame, the HUD reports scan counts.
 - The runtime grate-crossing check and the actual movement through the opening still need validation in the running remake world.

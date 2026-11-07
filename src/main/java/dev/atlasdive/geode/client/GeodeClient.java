@@ -36,14 +36,16 @@ public final class GeodeClient {
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
+    private final ParticleChestDetector particleDetector=new ParticleChestDetector();
+    private World trackedParticleWorld;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
-    private int loadedChestTiles,inRangeChestTiles,excludedChestTiles;
-    private boolean patrolComplete;
+    private int loadedChestTiles,particleChestTiles,unmarkedChestTiles,excludedChestTiles,activeParticles;
+    private boolean patrolTransit;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
@@ -58,6 +60,8 @@ public final class GeodeClient {
         if(!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
+        if(trackedParticleWorld!=w){particleDetector.clear();trackedParticleWorld=w;}
+        activeParticles=ParticleTracker.capture(mc,particleDetector,ticks,GeodeConfig.particleMemoryTicks);
         collectResult(p);
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         switch(stage){
@@ -95,14 +99,16 @@ public final class GeodeClient {
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
         mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Chest scan r="+GeodeConfig.scanRadius+" | loaded "+loadedChestTiles
-                +" | in range "+inRangeChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,73,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chests: loaded "+loadedChestTiles+" | particle-marked "+particleChestTiles
+                +" | no marker "+unmarkedChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Particles: "+(activeParticles<0?"unavailable":activeParticles)
+                +" active | recent positions "+particleDetector.getRememberedBlockCount(),7,73,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,84,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,84,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,95,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,95,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,106,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,106,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,117,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -139,13 +145,14 @@ public final class GeodeClient {
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
         cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
-        patrolOrigin=null;patrolWaypoint=null;patrolComplete=false;
+        patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;particleDetector.clear();trackedParticleWorld=mc.theWorld;
         failedGateApproaches.clear();resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
     }
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;movement.stop();
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
+        particleDetector.clear();trackedParticleWorld=null;activeParticles=0;
     }
     private void tickRoute(EntityPlayerSP p,World w){
         if(stage==Stage.PATROL&&++patrolScanTicks>=GeodeConfig.scanIntervalTicks){
@@ -196,9 +203,15 @@ public final class GeodeClient {
             }
         }
         else if(stage==Stage.PATROL){
-            patrolLeg++;patrolFailures=0;patrolWaypoint=null;
-            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
-            status="Patrol point reached; scanning the newly loaded area";
+            if(patrolTransit){
+                patrolTransit=false;
+                status="Patrol transit point reached; continuing the same expanding leg";
+                routePatrol(p,w);
+            }else{
+                patrolLeg++;patrolFailures=0;patrolWaypoint=null;
+                stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+                status="Patrol point reached; scanning the newly loaded area";
+            }
         }
     }
     private void reRoute(EntityPlayerSP p,World w){
@@ -235,39 +248,32 @@ public final class GeodeClient {
         route(p,w,ChestApproachPlanner.candidates(c,3,3),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
-        if(patrolComplete){
-            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
-            status="Patrol coverage exhausted; continuing to scan loaded Sewer chunks";
-            return;
-        }
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
-        // Keep patrol coverage centered on the Sewer scan area, not on the last
-        // waypoint. This avoids progressively drifting outside the chest scan radius.
         if(patrolOrigin==null)patrolOrigin=new BlockPos(GATE.x,y,GATE.z);
         patrolWaypoint=PatrolPlanner.waypoint(patrolOrigin,patrolLeg,y);
-        int patrolRadius=Math.max(4,GeodeConfig.scanRadius-3);
-        if(!PatrolPlanner.insideHorizontalRadius(patrolWaypoint,GATE,patrolRadius)){
-            patrolComplete=true;patrolWaypoint=null;
-            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
-            status="Patrol perimeter reached; scanning loaded Sewer chunks";
-            return;
-        }
-        int x=patrolWaypoint.x,z=patrolWaypoint.z;
-        status="Planning expanding patrol leg "+patrolLeg+" toward "+patrolWaypoint;
-        route(p,w,box(x-2,x+2,y-3,y+3,z-2,z+2),"Sewer patrol");
+
+        // Patrol legs grow without a configured scan-radius boundary. Long legs are
+        // split into local A* segments so the 128-block collision snapshot never clips
+        // either endpoint and the player can keep loading chunks while travelling.
+        BlockPos transit=ChestRoutePlanner.nextWaypoint(p.posX,p.posZ,patrolWaypoint,56,y);
+        patrolTransit=transit!=null;
+        BlockPos destination=patrolTransit?transit:patrolWaypoint;
+        if(patrolTransit)status="Planning patrol leg "+patrolLeg+" via "+destination+" toward "+patrolWaypoint;
+        else status="Planning expanding patrol leg "+patrolLeg+" toward "+patrolWaypoint;
+        route(p,w,box(destination.x-2,destination.x+2,y-3,y+3,destination.z-2,destination.z+2),"Sewer patrol");
     }
 
     private void skipPatrolWaypoint(String reason){
         patrolLeg++;
         patrolFailures++;
         patrolWaypoint=null;
+        patrolTransit=false;
         retryTicks=ticks+5;
         status=reason+" (leg "+patrolLeg+")";
         if(patrolFailures>=12){
-            patrolComplete=true;
-            stage=Stage.SEEK;
-            scanTicks=GeodeConfig.scanIntervalTicks;
-            status="Patrol stalled; scanning the currently loaded Sewer area";
+            patrolFailures=0;
+            retryTicks=ticks+100;
+            status="12 patrol waypoints were unreachable; pausing briefly before continuing the unbounded spiral";
         }
     }
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
@@ -395,15 +401,19 @@ public final class GeodeClient {
             routeChest(p,w,best);
         }else if(++emptyScans>=5){
             emptyScans=0;stage=Stage.PATROL;patrolScanTicks=0;routePatrol(p,w);
-        }else status="No loaded Sewer chest; scanning again";
+        }else status="No particle-marked Sewer chest in loaded chunks; scanning again";
     }
 
-    /** Searches only tile entities in chunks currently loaded by the client. */
+    /**
+     * Searches every chest tile entity in client-loaded chunks, without a horizontal
+     * distance or Y restriction. A chest is considered a Sewer chest only when a
+     * recent particle position was observed within the configured radius.
+     */
     private BlockPos findNearestLoadedChest(EntityPlayerSP p,World w){
         BlockPos best=null;
         double bestDistance=Double.POSITIVE_INFINITY;
         long now=w.getTotalWorldTime();
-        loadedChestTiles=0;inRangeChestTiles=0;excludedChestTiles=0;
+        loadedChestTiles=0;particleChestTiles=0;unmarkedChestTiles=0;excludedChestTiles=0;
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
             loadedChestTiles++;
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
@@ -411,10 +421,13 @@ public final class GeodeClient {
                 excludedChestTiles++;
                 continue;
             }
-            if(!ChestScanRange.contains(pos.getX(),pos.getZ(),GATE.x,GATE.z,GeodeConfig.scanRadius)
-                    ||pos.getY()<GATE.y-48||pos.getY()>GATE.y+16)continue;
-            inRangeChestTiles++;
             BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
+            if(!particleDetector.hasParticleNear(candidate,ticks,GeodeConfig.particleProximityRadius,
+                    GeodeConfig.particleMemoryTicks)){
+                unmarkedChestTiles++;
+                continue;
+            }
+            particleChestTiles++;
             Long until=cooldown.get(candidate);
             if(until!=null&&until>now)continue;
             double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);

@@ -165,20 +165,36 @@ public class PathfinderTest {
         assertEquals(new BlockPos(39,66,59),PatrolPlanner.waypoint(origin,4,66));
     }
 
-    @Test public void patrolPlannerCanStopAtTheChestScanBoundary(){
+    @Test public void patrolPlannerContinuesBeyondFormer150BlockBoundary(){
         BlockPos center=new BlockPos(47,66,75);
-        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(50,66,90),center,64));
-        assertTrue(PatrolPlanner.insideHorizontalRadius(new BlockPos(87,66,75),center,64));
-        assertFalse(PatrolPlanner.insideHorizontalRadius(new BlockPos(112,66,75),center,64));
+        BlockPos distant=PatrolPlanner.waypoint(center,80,66);
+        long dx=(long)distant.x-center.x,dz=(long)distant.z-center.z;
+        assertTrue("the expanding spiral must continue past the old 150-block limit",
+                dx*dx+dz*dz>150L*150L);
     }
 
-    @Test public void chestScanRangeUses150BlockCircularRadius(){
-        assertTrue(ChestScanRange.contains(197,75,47,75,150));
-        assertTrue(ChestScanRange.contains(47,225,47,75,150));
-        assertFalse(ChestScanRange.contains(198,75,47,75,150));
-        assertFalse(ChestScanRange.contains(47,226,47,75,150));
-        assertFalse("diagonal points outside a 150-block circle must be excluded",
-                ChestScanRange.contains(167,175,47,75,150));
+    @Test public void particleWithinConfiguredRadiusMarksChestAsSewerChest(){
+        ParticleChestDetector detector=new ParticleChestDetector();
+        detector.observe(20.5D,69.5D,75.5D,100L);
+        assertTrue(detector.hasParticleNear(new BlockPos(22,69,75),100L,3,100L));
+    }
+
+    @Test public void particleOutsideConfiguredRadiusDoesNotMarkChest(){
+        ParticleChestDetector detector=new ParticleChestDetector();
+        detector.observe(20.5D,69.5D,75.5D,100L);
+        assertFalse(detector.hasParticleNear(new BlockPos(24,69,75),100L,3,100L));
+    }
+
+    @Test public void particleEvidenceExpiresAfterConfiguredMemoryWindow(){
+        ParticleChestDetector detector=new ParticleChestDetector();
+        detector.observe(20.5D,69.5D,75.5D,100L);
+        assertFalse(detector.hasParticleNear(new BlockPos(20,69,75),201L,3,100L));
+    }
+
+    @Test public void particleRadiusUsesThreeDimensionalDistance(){
+        ParticleChestDetector detector=new ParticleChestDetector();
+        detector.observe(20.5D,69.5D,75.5D,100L);
+        assertFalse(detector.hasParticleNear(new BlockPos(22,71,77),100L,3,100L));
     }
 
     @Test public void distantChestRoutesAreSplitInto56BlockSegments(){

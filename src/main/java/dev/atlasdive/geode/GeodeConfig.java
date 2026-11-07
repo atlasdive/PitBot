@@ -8,7 +8,8 @@ public final class GeodeConfig {
     private static Configuration config;
     public static String[] allowedServers = {"localhost", "127.0.0.1"};
     public static int scanIntervalTicks = 20;
-    public static int scanRadius = 150;
+    public static int particleProximityRadius = 3;
+    public static int particleMemoryTicks = 100;
     public static int maxExpandedNodes = 120000;
     public static int maxFallBlocks = 48;
     public static int gateScanRadius = 12;
@@ -21,19 +22,14 @@ public final class GeodeConfig {
                 "Exact hostnames where Geode may run. Add your own remake server.");
         scanIntervalTicks = config.getInt("scanIntervalTicks", "chests", 20, 5, 100,
                 "Ticks between scans of loaded chunks.");
-        scanRadius = config.getInt("scanRadius", "chests", 150, 8, 256,
-                "Horizontal Sewer chest scan radius in blocks.");
-        // Migrate previous generated defaults (32/64) to 150 while preserving
-        // values that the user deliberately customized.
-        int scanRadiusMigration = config.getInt("scanRadiusMigration", "chests", 0, 0, 2,
-                "Internal config migration marker.");
-        if (scanRadiusMigration < 2) {
-            if (scanRadius == 32 || scanRadius == 64) {
-                scanRadius = 150;
-                config.get("chests", "scanRadius", 150).set(150);
-            }
-            config.get("chests", "scanRadiusMigration", 2).set(2);
-        }
+        particleProximityRadius = config.getInt("particleProximityRadius", "chests", 3, 1, 8,
+                "Maximum distance in blocks from a chest to a particle position.");
+        particleMemoryTicks = config.getInt("particleMemoryTicks", "chests", 100, 20, 300,
+                "How long particle positions remain valid (20 ticks = 1 second).");
+        // Remove the retired finite-distance scan settings. Discovery now has no
+        // horizontal radius; only chunks loaded by the client can be inspected.
+        if (config.hasKey("chests", "scanRadius")) config.getCategory("chests").remove("scanRadius");
+        if (config.hasKey("chests", "scanRadiusMigration")) config.getCategory("chests").remove("scanRadiusMigration");
         maxExpandedNodes = config.getInt("maxExpandedNodes", "pathfinding", 120000, 5000, 250000,
                 "Maximum A* nodes expanded in one request.");
         int pathBudgetMigration = config.getInt("pathBudgetMigration", "pathfinding", 0, 0, 2,
