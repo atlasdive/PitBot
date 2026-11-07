@@ -172,6 +172,15 @@ public class PathfinderTest {
         assertFalse(PatrolPlanner.insideHorizontalRadius(new BlockPos(112,66,75),center,64));
     }
 
+    @Test public void chestScanRangeUses150BlockCircularRadius(){
+        assertTrue(ChestScanRange.contains(197,75,47,75,150));
+        assertTrue(ChestScanRange.contains(47,225,47,75,150));
+        assertFalse(ChestScanRange.contains(198,75,47,75,150));
+        assertFalse(ChestScanRange.contains(47,226,47,75,150));
+        assertFalse("diagonal points outside a 150-block circle must be excluded",
+                ChestScanRange.contains(167,175,47,75,150));
+    }
+
     @Test public void chestApproachPlannerSearchesMultipleSidesAndHeights(){
         BlockPos chest=new BlockPos(20,69,75);
         java.util.List<BlockPos> candidates=ChestApproachPlanner.candidates(chest,3,3);
