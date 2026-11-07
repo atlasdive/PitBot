@@ -29,31 +29,46 @@ public final class Pathfinder {
             }
 
             for(int[] d:DIRS){
-                BlockPos next=null;MovementKind kind=MovementKind.WALK;
+                boolean diagonal=d[0]!=0&&d[1]!=0;
+                boolean cornerClear=!diagonal||
+                        (world.clear(cur.pos.add(d[0],0,0))&&world.clear(cur.pos.add(0,0,d[1])));
+                if(!cornerClear)continue;
+
+                // Keep every safe landing at this horizontal offset. Considering only the
+                // first support surface can hide a much faster drop to a lower platform.
                 for(int dy=1;dy>=-maxFall;dy--){
-                    BlockPos p=cur.pos.add(d[0],dy,d[1]);
-                    if(!world.canStand(p)||world.hazard(p))continue;
-                    if(d[0]!=0&&d[1]!=0&&(!world.clear(cur.pos.add(d[0],0,0))||!world.clear(cur.pos.add(0,0,d[1]))))continue;
-                    if(dy>0){kind=MovementKind.STEP_UP;if(!world.jumpArcClear(cur.pos,p))continue;}
-                    else if(dy<0){kind=MovementKind.DROP;if(!dropArcClear(world,cur.pos,p,d[0],d[1]))continue;}
-                    else if(world.liquid(p))kind=MovementKind.SWIM;
-                    else if(world.climbable(p))kind=MovementKind.CLIMB;
-                    next=p;break;
+                    BlockPos next=cur.pos.add(d[0],dy,d[1]);
+                    if(!world.canStand(next)||world.hazard(next))continue;
+                    MovementKind kind;
+                    if(dy>0){
+                        kind=MovementKind.STEP_UP;
+                        if(!world.jumpArcClear(cur.pos,next))continue;
+                    }else if(dy<0){
+                        kind=MovementKind.DROP;
+                        if(!dropArcClear(world,cur.pos,next,d[0],d[1]))continue;
+                    }else if(world.liquid(next))kind=MovementKind.SWIM;
+                    else if(world.climbable(next))kind=MovementKind.CLIMB;
+                    else kind=MovementKind.WALK;
+
+                    double horizontal=Math.sqrt(d[0]*d[0]+d[1]*d[1]);
+                    double vertical=Math.abs(dy);
+                    double stepCost=horizontal;
+                    if(kind==MovementKind.DROP) {
+                        // Falls have no damage/risk surcharge in this remake.
+                    } else if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
+                    else if(kind==MovementKind.SWIM)stepCost+=2.0D;
+                    else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
+                    relax(next,kind,cur.pos,cur.g+stepCost+Math.max(0.0D,world.extraCost(next)),
+                            goals,best,parents,open);
                 }
-                if(next==null){
-                    BlockPos jump=cur.pos.add(d[0]*2,0,d[1]*2);
-                    if(world.canStand(jump)&&!world.hazard(jump)&&world.jumpArcClear(cur.pos,jump)){next=jump;kind=MovementKind.JUMP;}
+
+                // A two-block horizontal gap can be jumped only after a full arc check.
+                BlockPos jump=cur.pos.add(d[0]*2,0,d[1]*2);
+                if(world.canStand(jump)&&!world.hazard(jump)&&world.jumpArcClear(cur.pos,jump)){
+                    double cost=2.0D* Math.sqrt(d[0]*d[0]+d[1]*d[1])+2.0D
+                            +Math.max(0.0D,world.extraCost(jump));
+                    relax(jump,MovementKind.JUMP,cur.pos,cur.g+cost,goals,best,parents,open);
                 }
-                if(next==null)continue;
-                double horizontal=Math.sqrt(d[0]*d[0]+d[1]*d[1])*(kind==MovementKind.JUMP?2.0D:1.0D);
-                double vertical=Math.abs(next.y-cur.pos.y);
-                double stepCost=horizontal;
-                if(kind==MovementKind.DROP)stepCost=horizontal; // Falls are not penalized on this server.
-                else if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
-                else if(kind==MovementKind.JUMP)stepCost+=2.0D;
-                else if(kind==MovementKind.SWIM)stepCost+=2.0D;
-                else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
-                relax(next,kind,cur.pos,cur.g+stepCost+Math.max(0.0D,world.extraCost(next)),goals,best,parents,open);
             }
             if(Thread.currentThread().isInterrupted())break;
         }
@@ -81,7 +96,7 @@ public final class Pathfinder {
         int drop=from.y-landing.y;
         for(int y=1;y<drop;y++){
             BlockPos air=new BlockPos(from.x+dx,from.y-y,from.z+dz);
-            if(!world.clear(air)||world.hazard(air))return false;
+            if(!world.clear(air)||!world.clear(air.add(0,1,0))||world.hazard(air))return false;
         }
         return true;
     }
