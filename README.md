@@ -27,7 +27,8 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
-- A HUD displays the current state and target chest.
+- The HUD displays the current state, target chest, and expanded A* node count.
+- The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
 
 ## Server allowlist
 
