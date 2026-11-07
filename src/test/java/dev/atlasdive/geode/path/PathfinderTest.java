@@ -226,8 +226,10 @@ public class PathfinderTest {
         assertEquals(new BlockPos(81,59,63),plan.getPlacedBlock(6));
         assertEquals(new BlockPos(81,58,63),plan.getSupportBlock(6));
         assertEquals(new BlockPos(81,60,63),plan.getTopStandingPosition());
-        assertTrue("the final standing cell must be one of the chest approach candidates",
+        assertFalse("the original 3-block radius is just short of the scaffold position",
                 ChestApproachPlanner.candidates(new BlockPos(80,60,66),3,3).contains(plan.getTopStandingPosition()));
+        assertTrue("the scaffold position must be included after expanding the approach radius to 4",
+                ChestApproachPlanner.candidates(new BlockPos(80,60,66),4,3).contains(plan.getTopStandingPosition()));
         assertNull("the scaffold route must not apply to unrelated chests",
                 ChestScaffoldPlan.forChest(new BlockPos(80,60,65)));
     }

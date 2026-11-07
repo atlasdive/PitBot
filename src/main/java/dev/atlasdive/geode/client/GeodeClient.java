@@ -278,7 +278,8 @@ public final class GeodeClient {
                     "chest "+c+" transit");
             return;
         }
-        route(p,w,ChestApproachPlanner.candidates(c,3,3),"chest "+c);
+        int approachRadius=c.equals(scaffoldedChest)?4:3;
+        route(p,w,ChestApproachPlanner.candidates(c,approachRadius,3),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
