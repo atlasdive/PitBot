@@ -1,105 +1,112 @@
 package dev.atlasdive.geode.path;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Detects a passable shaft through a nearby iron-bar structure.
- * The marker is approximate: scan downward from the player's current level
- * through the entire configured fall range and rank planes by nearby bar evidence.
+ * Finds an open hole in an iron-bar floor and safe standing cells adjacent to it.
+ *
+ * Detection does NOT require a solid landing directly beneath the hole. The player
+ * pathfinds to a supported approach cell, steps into the opening, and the runtime
+ * controller confirms the downward crossing. The Sewer floor can be elsewhere.
  */
 public final class GatePlanner {
-    private int scannedColumns,clearColumns,framedColumns,safeLandingColumns,minPlaneY,maxPlaneY;
+    private int scannedColumns,clearColumns,framedColumns,approachColumns,minPlaneY,maxPlaneY;
 
     public GatePlan find(PathWorld world,BlockPos marker,BlockPos start,int radius,int maxFall){
-        scannedColumns=0;clearColumns=0;framedColumns=0;safeLandingColumns=0;
+        scannedColumns=0;clearColumns=0;framedColumns=0;approachColumns=0;
         if(world==null||marker==null||start==null||radius<0||maxFall<1)return null;
 
         minPlaneY=marker.y-maxFall;
-        // playerPos() uses floor(feetY), so the same integer Y may still be
-        // physically above a partial-block grate.
         maxPlaneY=Math.min(marker.y+2,start.y);
         if(maxPlaneY<minPlaneY)return null;
 
-        int bestScore=-1;
-        int bestPlaneY=Integer.MIN_VALUE;
-        List<BlockPos> bestLandings=new ArrayList<BlockPos>();
-        Set<BlockPos> bestColumns=new HashSet<BlockPos>();
-
+        // Scan from the player's current level downward. Prefer the first usable
+        // grate layer encountered, rather than a deeper opening below it.
         for(int plane=maxPlaneY;plane>=minPlaneY;plane--){
+            int bestFrameScore=-1;
+            List<BlockPos> approaches=new ArrayList<BlockPos>();
+            Map<BlockPos,BlockPos> approachMap=new HashMap<BlockPos,BlockPos>();
+            Set<BlockPos> columns=new HashSet<BlockPos>();
+
             for(int dx=-radius;dx<=radius;dx++)for(int dz=-radius;dz<=radius;dz++){
                 if(dx*dx+dz*dz>radius*radius)continue;
                 scannedColumns++;
                 int x=marker.x+dx,z=marker.z+dz;
+                BlockPos aperture=new BlockPos(x,plane,z);
 
-                // Need enough collision clearance for the full 1.8-block player body.
-                if(!clearPlayerColumn(world,x,z,plane,plane+1))continue;
+                // The player's 1.8-block body must fit through the hole and begin
+                // descending into the block layer below the iron-bar floor.
+                if(!world.clear(aperture.add(0,-1,0))
+                        ||!world.clear(aperture)
+                        ||!world.clear(aperture.add(0,1,0)))continue;
                 clearColumns++;
 
-                int score=countNearbyIronBars(world,x,z,plane);
-                if(score<=0)continue;
+                int frameScore=countNearbyIronBars(world,x,z,plane);
+                if(frameScore<2)continue;
                 framedColumns++;
 
-                BlockPos landing=findLanding(world,x,z,plane,maxFall);
-                if(landing==null)continue;
-                safeLandingColumns++;
-
-                // Same-plane bars are strongest evidence; staggered bars one block
-                // above/below are accepted but have a lower score.
-                if(score>bestScore||(score==bestScore&&plane>bestPlaneY)){
-                    bestScore=score;
-                    bestPlaneY=plane;
-                    bestLandings.clear();
-                    bestColumns.clear();
+                List<BlockPos> localApproaches=new ArrayList<BlockPos>();
+                for(int[] d:APPROACH_DIRS){
+                    BlockPos approach=aperture.add(d[0],0,d[1]);
+                    if(!world.canStand(approach)||world.hazard(approach))continue;
+                    if(!world.clear(approach.add(0,1,0)))continue;
+                    if(!world.lineClear(approach,aperture))continue;
+                    localApproaches.add(approach);
                 }
-                if(score==bestScore&&plane==bestPlaneY){
-                    bestLandings.add(landing);
-                    bestColumns.add(new BlockPos(x,plane,z));
+                if(localApproaches.isEmpty())continue;
+                approachColumns+=localApproaches.size();
+
+                if(frameScore>bestFrameScore){
+                    bestFrameScore=frameScore;
+                    approaches.clear();
+                    approachMap.clear();
+                    columns.clear();
+                }
+                if(frameScore==bestFrameScore){
+                    for(BlockPos approach:localApproaches){
+                        if(!approachMap.containsKey(approach)){
+                            approaches.add(approach);
+                            approachMap.put(approach,aperture);
+                        }
+                    }
+                    columns.add(aperture);
                 }
             }
-        }
 
-        return bestLandings.isEmpty()?null:new GatePlan(bestPlaneY,bestLandings,bestColumns);
+            if(!approaches.isEmpty()){
+                return new GatePlan(plane,approaches,approachMap,columns);
+            }
+        }
+        return null;
     }
 
     private int countNearbyIronBars(PathWorld world,int x,int z,int plane){
-        int samePlane=0,staggered=0;
+        int sameFloor=0,staggered=0;
+        // The grate/floor itself is usually one block below the player's feet plane.
+        // Also inspect one block above and below to tolerate connected-bar shapes.
         for(int dy=-1;dy<=1;dy++){
             for(int dx=-2;dx<=2;dx++)for(int dz=-2;dz<=2;dz++){
                 if(dx==0&&dz==0&&dy==0)continue;
                 if(Math.abs(dx)+Math.abs(dz)>3)continue;
                 if(!world.ironBars(new BlockPos(x+dx,plane+dy,z+dz)))continue;
-                if(dy==0)samePlane++;
+                if(dy==-1)sameFloor++;
                 else staggered++;
             }
         }
-        return samePlane*10+staggered;
+        return sameFloor*10+staggered;
     }
 
-    private BlockPos findLanding(PathWorld world,int x,int z,int plane,int maxFall){
-        for(int y=plane-1;y>=plane-maxFall;y--){
-            BlockPos candidate=new BlockPos(x,y,z);
-            if(world.canStand(candidate)&&clearPlayerColumn(world,x,z,y,plane+1))return candidate;
-        }
-        return null;
-    }
-
-    private boolean clearPlayerColumn(PathWorld world,int x,int z,int fromY,int throughY){
-        // throughY is the head block of the last tested player position.
-        // Check each occupied block once (the previous version accidentally
-        // required three full air blocks above the opening).
-        for(int y=fromY;y<=throughY;y++){
-            if(!world.clear(new BlockPos(x,y,z)))return false;
-        }
-        return true;
-    }
+    private static final int[][] APPROACH_DIRS={{1,0},{-1,0},{0,1},{0,-1}};
 
     public int scannedColumns(){return scannedColumns;}
     public int clearColumns(){return clearColumns;}
     public int framedColumns(){return framedColumns;}
-    public int safeLandingColumns(){return safeLandingColumns;}
+    public int approachColumns(){return approachColumns;}
     public int minPlaneY(){return minPlaneY;}
     public int maxPlaneY(){return maxPlaneY;}
 }
