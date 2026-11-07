@@ -173,28 +173,28 @@ public class PathfinderTest {
                 dx*dx+dz*dz>150L*150L);
     }
 
-    @Test public void particleWithinConfiguredRadiusMarksChestAsSewerChest(){
-        ParticleChestDetector detector=new ParticleChestDetector();
-        detector.observe(20.5D,69.5D,75.5D,100L);
-        assertTrue(detector.hasParticleNear(new BlockPos(22,69,75),100L,3,100L));
+    @Test public void onlyTheConfiguredChestAreaIsExcluded(){
+        assertTrue(ChestExclusion.isExcluded(19,66,72));
+        assertTrue(ChestExclusion.isExcluded(23,70,82));
+        assertTrue(ChestExclusion.isExcluded(21,68,77));
+        assertFalse(ChestExclusion.isExcluded(18,68,77));
+        assertFalse(ChestExclusion.isExcluded(24,68,77));
+        assertFalse(ChestExclusion.isExcluded(21,65,77));
+        assertFalse(ChestExclusion.isExcluded(21,71,77));
+        assertFalse(ChestExclusion.isExcluded(21,68,71));
+        assertFalse(ChestExclusion.isExcluded(21,68,83));
+        assertFalse("distant chests are eligible without particle evidence",ChestExclusion.isExcluded(800,60,-600));
     }
 
-    @Test public void particleOutsideConfiguredRadiusDoesNotMarkChest(){
-        ParticleChestDetector detector=new ParticleChestDetector();
-        detector.observe(20.5D,69.5D,75.5D,100L);
-        assertFalse(detector.hasParticleNear(new BlockPos(24,69,75),100L,3,100L));
-    }
-
-    @Test public void particleEvidenceExpiresAfterConfiguredMemoryWindow(){
-        ParticleChestDetector detector=new ParticleChestDetector();
-        detector.observe(20.5D,69.5D,75.5D,100L);
-        assertFalse(detector.hasParticleNear(new BlockPos(20,69,75),201L,3,100L));
-    }
-
-    @Test public void particleRadiusUsesThreeDimensionalDistance(){
-        ParticleChestDetector detector=new ParticleChestDetector();
-        detector.observe(20.5D,69.5D,75.5D,100L);
-        assertFalse(detector.hasParticleNear(new BlockPos(22,71,77),100L,3,100L));
+    @Test public void chestLootTimerAllowsOneClickEveryTwoTicks(){
+        ChestLootTimer timer=new ChestLootTimer();
+        assertFalse(timer.isReady());
+        assertTrue(timer.isReady());
+        assertFalse(timer.isReady());
+        assertTrue(timer.isReady());
+        timer.reset();
+        assertFalse(timer.isReady());
+        assertTrue(timer.isReady());
     }
 
     @Test public void distantChestRoutesAreSplitInto56BlockSegments(){

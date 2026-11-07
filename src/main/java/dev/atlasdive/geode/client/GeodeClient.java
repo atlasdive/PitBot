@@ -39,8 +39,7 @@ public final class GeodeClient {
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
-    private final ParticleChestDetector particleDetector=new ParticleChestDetector();
-    private World trackedParticleWorld;
+    private final ChestLootTimer lootTimer=new ChestLootTimer();
     private ChestScaffoldPlan scaffoldPlan;
     private BlockPos scaffoldedChest;
     private final Set<BlockPos> failedScaffoldChests=new HashSet<BlockPos>();
@@ -52,9 +51,9 @@ public final class GeodeClient {
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
-    private int loadedChestTiles,particleChestTiles,unmarkedChestTiles,excludedChestTiles,activeParticles;
+    private int loadedChestTiles,excludedChestTiles;
     private boolean patrolTransit;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
@@ -70,8 +69,6 @@ public final class GeodeClient {
         if(!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
-        if(trackedParticleWorld!=w){particleDetector.clear();trackedParticleWorld=w;}
-        activeParticles=ParticleTracker.capture(mc,particleDetector,ticks,GeodeConfig.particleMemoryTicks);
         collectResult(p);
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         switch(stage){
@@ -110,17 +107,14 @@ public final class GeodeClient {
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
         mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Chests: loaded "+loadedChestTiles+" | particle-marked "+particleChestTiles
-                +" | no marker "+unmarkedChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Particles: "+(activeParticles<0?"unavailable":activeParticles)
-                +" active | recent positions "+particleDetector.getRememberedBlockCount(),7,73,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,84,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chests: loaded "+loadedChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,73,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,95,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,84,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,106,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Scaffold: "+scaffoldIndex+"/7"+(stage==Stage.BUILD_SCAFFOLD?" placing":""),7,117,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,128,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,95,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Scaffold: "+scaffoldIndex+"/7"+(stage==Stage.BUILD_SCAFFOLD?" placing":""),7,106,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,117,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -158,14 +152,14 @@ public final class GeodeClient {
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
         cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
-        patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;particleDetector.clear();trackedParticleWorld=mc.theWorld;
+        patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
         failedGateApproaches.clear();resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
     }
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;movement.stop();
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
-        particleDetector.clear();trackedParticleWorld=null;activeParticles=0;
+        lootTimer.reset();lootSlotCursor=0;
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
     }
     private void tickRoute(EntityPlayerSP p,World w){
@@ -631,7 +625,7 @@ public final class GeodeClient {
             routeChest(p,w,best);
         }else if(++emptyScans>=5){
             emptyScans=0;stage=Stage.PATROL;patrolScanTicks=0;routePatrol(p,w);
-        }else status="No particle-marked Sewer chest in loaded chunks; scanning again";
+        }else status="No eligible chest in loaded chunks; scanning again";
     }
 
     /**
@@ -643,7 +637,7 @@ public final class GeodeClient {
         BlockPos best=null;
         double bestDistance=Double.POSITIVE_INFINITY;
         long now=w.getTotalWorldTime();
-        loadedChestTiles=0;particleChestTiles=0;unmarkedChestTiles=0;excludedChestTiles=0;
+        loadedChestTiles=0;excludedChestTiles=0;
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
             loadedChestTiles++;
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
@@ -652,12 +646,6 @@ public final class GeodeClient {
                 continue;
             }
             BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
-            if(!particleDetector.hasParticleNear(candidate,ticks,GeodeConfig.particleProximityRadius,
-                    GeodeConfig.particleMemoryTicks)){
-                unmarkedChestTiles++;
-                continue;
-            }
-            particleChestTiles++;
             Long until=cooldown.get(candidate);
             if(until!=null&&until>now)continue;
             double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
@@ -666,7 +654,7 @@ public final class GeodeClient {
         return best;
     }
     private boolean isExcludedChest(int x,int y,int z){
-        return x>=19&&x<=23&&y>=66&&y<=70&&z>=72&&z<=82;
+        return ChestExclusion.isExcluded(x,y,z);
     }
 
     private void openChest(EntityPlayerSP p,World w){
@@ -676,7 +664,9 @@ public final class GeodeClient {
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
-        if(mc.currentScreen instanceof GuiChest&&p.openContainer instanceof ContainerChest){stage=Stage.LOOT;lootTicks=0;emptySlots=0;failedClicks=0;return;}
+        if(mc.currentScreen instanceof GuiChest&&p.openContainer instanceof ContainerChest){
+            stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;failedClicks=0;return;
+        }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
         if(ticks<retryTicks)return;
         if(openAttempts>=3){cooldown.put(chest,w.getTotalWorldTime()+200L);chest=null;stage=Stage.SEEK;return;}
@@ -684,21 +674,46 @@ public final class GeodeClient {
         mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
     }
     private void lootChest(EntityPlayerSP p){
-        if(!(mc.currentScreen instanceof GuiChest)||!(p.openContainer instanceof ContainerChest)){finish();return;}
-        if(++lootTicks<3)return;lootTicks=0;
-        ContainerChest c=(ContainerChest)p.openContainer;int n=c.getLowerChestInventory().getSizeInventory();
-        for(int i=0;i<n;i++){
-            ItemStack s=c.getLowerChestInventory().getStackInSlot(i);if(s==null)continue;
-            int before=s.stackSize;mc.playerController.windowClick(c.windowId,i,0,1,p);
-            ItemStack after=c.getLowerChestInventory().getStackInSlot(i);
-            failedClicks=after!=null&&after.stackSize>=before?failedClicks+1:0;
-            if(failedClicks>=3){p.closeScreen();finish();return;}return;
+        if(!(mc.currentScreen instanceof GuiChest)||!(p.openContainer instanceof ContainerChest)){
+            finish();
+            return;
         }
-        if(++emptySlots>=2){p.closeScreen();finish();}
+        ContainerChest container=(ContainerChest)p.openContainer;
+        net.minecraft.inventory.IInventory inventory=container.getLowerChestInventory();
+        int size=inventory.getSizeInventory();
+
+        // Skip empty slots immediately. Every actual shift-click is separated by
+        // exactly two client ticks, regardless of how many empty slots are skipped.
+        for(int offset=0;offset<size;offset++){
+            int slot=(lootSlotCursor+offset)%size;
+            ItemStack before=inventory.getStackInSlot(slot);
+            if(before==null)continue;
+            if(!lootTimer.isReady())return;
+
+            int beforeCount=before.stackSize;
+            mc.playerController.windowClick(container.windowId,slot,0,1,p);
+            ItemStack after=inventory.getStackInSlot(slot);
+            lootSlotCursor=(slot+1)%size;
+
+            if(after==null||after.stackSize<beforeCount){
+                failedClicks=0;
+                status="Taking chest contents (next slot "+(lootSlotCursor+1)+"/"+size+")";
+            }else if(++failedClicks>=3){
+                failedClicks=0;
+                status="Some items could not be moved. Inventory may be full; keeping chest open.";
+            }
+            return;
+        }
+
+        // Do not close after a failed shift-click. The GUI closes only after every
+        // lower-chest slot is confirmed empty.
+        p.closeScreen();
+        finish();
     }
     private void finish(){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
-        chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Chest cleared; searching for next";
+        chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootTimer.reset();
+        status="Chest emptied and GUI closed; searching for next";
     }
     private void tickGateEntry(EntityPlayerSP p){
         if(gateLanding==null){setGateKeys(false);stage=Stage.TO_GATE;retryTicks=ticks+5;return;}

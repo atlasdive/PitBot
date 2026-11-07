@@ -8,8 +8,6 @@ public final class GeodeConfig {
     private static Configuration config;
     public static String[] allowedServers = {"localhost", "127.0.0.1"};
     public static int scanIntervalTicks = 20;
-    public static int particleProximityRadius = 3;
-    public static int particleMemoryTicks = 100;
     public static int maxExpandedNodes = 120000;
     public static int maxFallBlocks = 48;
     public static int gateScanRadius = 12;
@@ -22,10 +20,8 @@ public final class GeodeConfig {
                 "Exact hostnames where Geode may run. Add your own remake server.");
         scanIntervalTicks = config.getInt("scanIntervalTicks", "chests", 20, 5, 100,
                 "Ticks between scans of loaded chunks.");
-        particleProximityRadius = config.getInt("particleProximityRadius", "chests", 3, 1, 8,
-                "Maximum distance in blocks from a chest to a particle position.");
-        particleMemoryTicks = config.getInt("particleMemoryTicks", "chests", 100, 20, 300,
-                "How long particle positions remain valid (20 ticks = 1 second).");
+        if (config.hasKey("chests", "particleProximityRadius")) config.getCategory("chests").remove("particleProximityRadius");
+        if (config.hasKey("chests", "particleMemoryTicks")) config.getCategory("chests").remove("particleMemoryTicks");
         // Remove the retired finite-distance scan settings. Discovery now has no
         // horizontal radius; only chunks loaded by the client can be inspected.
         if (config.hasKey("chests", "scanRadius")) config.getCategory("chests").remove("scanRadius");
