@@ -1,0 +1,77 @@
+name: Build Geode
+
+on:
+  push:
+    branches: [main, "fix/**", "feature/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: geode-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Forge 1.8.9 build (JDK 8 / Gradle 2.14.1)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: gradle
+
+      - name: Install Gradle 2.14.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://services.gradle.org/distributions/gradle-2.14.1-bin.zip \
+            --output "$RUNNER_TEMP/gradle-2.14.1-bin.zip"
+          unzip -q "$RUNNER_TEMP/gradle-2.14.1-bin.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-2.14.1/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain
+        run: |
+          java -version
+          gradle --version
+
+      - name: Prepare Forge 1.8.9 workspace
+        run: gradle --no-daemon setupDecompWorkspace --stacktrace
+
+      - name: Run unit tests and build mod
+        run: gradle --no-daemon test build --stacktrace
+
+      - name: Verify output JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f build/libs/Geode-0.1.0.jar
+          ls -lh build/libs/Geode-0.1.0.jar
+
+      - name: Upload Geode JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: Geode-Forge-1.8.9
+          path: build/libs/Geode-0.1.0.jar
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Geode-test-reports
+          path: build/test-results/test/
+          if-no-files-found: ignore
+          retention-days: 14
