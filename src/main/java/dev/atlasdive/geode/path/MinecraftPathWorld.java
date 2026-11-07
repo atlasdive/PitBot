@@ -3,6 +3,9 @@ package dev.atlasdive.geode.path;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockLadder;
 import net.minecraft.block.BlockVine;
+import net.minecraft.block.BlockPane;
+import net.minecraft.block.BlockFence;
+import net.minecraft.block.BlockWall;
 import net.minecraft.block.material.Material;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.init.Blocks;
@@ -13,7 +16,7 @@ import java.util.List;
 
 /** Immutable collision snapshot. Capture on the client thread; search the snapshot off-thread. */
 public final class MinecraftPathWorld implements PathWorld {
-    private static final byte OCCUPY=1, SUPPORT=2, HAZARD=4, CLIMB=8, LIQUID=16, CLEAR=32, IRON_BARS=64;
+    private static final byte OCCUPY=1, SUPPORT=2, HAZARD=4, CLIMB=8, LIQUID=16, CLEAR=32, GATE_BARRIER=64;
     private final int minX,minY,minZ,w,h,d;
     private final byte[] flags;
     private final float[] costs;
@@ -76,7 +79,10 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean liquid=m==Material.water||m==Material.lava;
             boolean hazard=b==Blocks.lava||b==Blocks.flowing_lava||b==Blocks.fire||b==Blocks.cactus;
             boolean climb=b instanceof BlockLadder||b instanceof BlockVine;
-            boolean ironBars=b==Blocks.iron_bars;
+            // Do not depend on one exact block ID. Remake maps may use iron bars,
+            // glass panes, fences, walls, or solid decorative blocks around the shaft.
+            boolean gateBarrier=b==Blocks.iron_bars||b instanceof BlockPane
+                    ||b instanceof BlockFence||b instanceof BlockWall||b.isOpaqueCube();
             int i=out.index(x,y,z);
             boolean occupy=!blocked[i];
             boolean support=supported[i]
@@ -89,7 +95,7 @@ public final class MinecraftPathWorld implements PathWorld {
             if(climb)f|=CLIMB;
             if(liquid)f|=LIQUID;
             if(occupy&&!hazard)f|=CLEAR;
-            if(ironBars)f|=IRON_BARS;
+            if(gateBarrier)f|=GATE_BARRIER;
             out.flags[i]=f;
             float c=0F;
             if(b==Blocks.water||b==Blocks.flowing_water)c+=2F;
@@ -111,7 +117,7 @@ public final class MinecraftPathWorld implements PathWorld {
     public boolean hazard(BlockPos p){return(flags(p)&HAZARD)!=0;}
     public boolean climbable(BlockPos p){return(flags(p)&CLIMB)!=0;}
     public boolean liquid(BlockPos p){return(flags(p)&LIQUID)!=0;}
-    public boolean ironBars(BlockPos p){return(flags(p)&IRON_BARS)!=0;}
+    public boolean gateBarrier(BlockPos p){return(flags(p)&GATE_BARRIER)!=0;}
     public double extraCost(BlockPos p){int i=idx(p);return i<0?1000000D:costs[i];}
 
     public boolean lineClear(BlockPos from,BlockPos to){
