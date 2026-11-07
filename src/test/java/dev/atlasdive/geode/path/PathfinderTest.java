@@ -30,6 +30,15 @@ public class PathfinderTest {
         assertTrue("drop cost should only be horizontal distance",result.steps.get(1).cost<1.1D);
     }
 
+    @Test public void smoothsStraightWalkingSegments(){
+        TestWorld world=new TestWorld();
+        PathResult result=new Pathfinder().find(world,new BlockPos(0,1,0),
+                java.util.Collections.singletonList(new BlockPos(8,1,0)),10000,8);
+        assertTrue(result.found());
+        assertTrue("straight path should be reduced to start and end",result.steps.size()<=2);
+        assertEquals(new BlockPos(8,1,0),result.steps.get(result.steps.size()-1).pos);
+    }
+
     @Test public void supportsStraightDownDropThroughOneBlockOpening(){
         TestWorld world=new TestWorld();
         world.support.clear();
@@ -53,5 +62,6 @@ public class PathfinderTest {
         public boolean liquid(BlockPos p){return false;}
         public double extraCost(BlockPos p){return 0D;}
         public boolean jumpArcClear(BlockPos a,BlockPos b){return true;}
+        public boolean lineClear(BlockPos a,BlockPos b){return a.y==b.y&&clear(a)&&clear(b);}
     }
 }
