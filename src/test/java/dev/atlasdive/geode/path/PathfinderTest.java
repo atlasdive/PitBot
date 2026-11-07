@@ -357,6 +357,21 @@ public class PathfinderTest {
         @Override public boolean lineClear(PathNode a,PathNode b){return a.y2==b.y2&&a.lane==b.lane;}
     }
 
+    @Test public void detectsWhenPlayerHasPassedWaypointInsteadOfTurningBack(){
+        assertTrue(WaypointGeometry.hasPassedCheckpoint(0,0,5,0,5.25,0.10,0.90));
+        assertFalse(WaypointGeometry.hasPassedCheckpoint(0,0,5,0,4.70,0.0,0.90));
+        assertFalse("a wide miss must not count as crossing the checkpoint",
+                WaypointGeometry.hasPassedCheckpoint(0,0,5,0,5.25,1.5,0.90));
+    }
+
+    @Test public void sharpTurnDisablesSprintOnlyNearCheckpoint(){
+        assertFalse(WaypointGeometry.isSharpTurn(0,0,5,0,10,0,38.0D));
+        assertTrue(WaypointGeometry.isSharpTurn(0,0,5,0,5,5,38.0D));
+        assertTrue(WaypointGeometry.shouldSprint(5.0D,true));
+        assertFalse(WaypointGeometry.shouldSprint(2.0D,true));
+        assertFalse(WaypointGeometry.shouldSprint(1.0D,false));
+    }
+
     private static class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         final Set<BlockPos> iron=new HashSet<BlockPos>();

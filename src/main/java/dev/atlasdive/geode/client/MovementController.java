@@ -43,6 +43,14 @@ public final class MovementController {
             dx=step.targetX-player.posX;dz=step.targetZ-player.posZ;
             distance=Math.sqrt(dx*dx+dz*dz);vertical=step.feetY-feet;
             double metric=Math.sqrt(distance*distance+vertical*vertical);
+            if(step.kind!=MovementKind.DROP&&index>0){
+                PathStep previous=path.get(index-1);
+                if(WaypointGeometry.hasPassedCheckpoint(previous.targetX,previous.targetZ,
+                        step.targetX,step.targetZ,player.posX,player.posZ,0.90D)){
+                    advance();
+                    continue;
+                }
+            }
             if(step.kind==MovementKind.DROP&&distance<=DROP_ALIGNMENT){
                 releaseForwardAndJump();
                 if(feet<=step.feetY+0.45D&&player.onGround){advance();continue;}
@@ -76,7 +84,15 @@ public final class MovementController {
             if(Math.abs(difference)>WALK_ALIGNMENT){
                 setForward(false);setJump(false);setSprint(false);
             }else{
-                setForward(true);setSprint(step.kind!=MovementKind.CLIMB);
+                setForward(true);
+                boolean sharpTurn=false;
+                if(index>0&&index+1<path.size()){
+                    PathStep previous=path.get(index-1),next=path.get(index+1);
+                    sharpTurn=WaypointGeometry.isSharpTurn(previous.targetX,previous.targetZ,
+                            step.targetX,step.targetZ,next.targetX,next.targetZ,38.0D);
+                }
+                setSprint(step.kind!=MovementKind.CLIMB&&player.onGround
+                        &&WaypointGeometry.shouldSprint(distance,sharpTurn));
                 boolean jump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
                         ||step.kind==MovementKind.JUMP)&&player.onGround&&distance<2.5D;
                 setJump(jump);

@@ -769,39 +769,10 @@ public final class GeodeClient {
             finish(false);
             return;
         }
-        ContainerChest container=(ContainerChest)p.openContainer;
-        net.minecraft.inventory.IInventory inventory=container.getLowerChestInventory();
-        int size=inventory.getSizeInventory();
-
-        // Skip empty slots immediately. Every actual shift-click is separated by
-        // exactly two client ticks, regardless of how many empty slots are skipped.
-        for(int offset=0;offset<size;offset++){
-            int slot=(lootSlotCursor+offset)%size;
-            ItemStack before=inventory.getStackInSlot(slot);
-            if(before==null)continue;
-            lootEmptyTicks=0;
-            if(!lootTimer.isReady())return;
-
-            int beforeCount=before.stackSize;
-            mc.playerController.windowClick(container.windowId,slot,0,1,p);
-            ItemStack after=inventory.getStackInSlot(slot);
-            lootSlotCursor=(slot+1)%size;
-
-            if(after==null||after.stackSize<beforeCount){
-                failedClicks=0;
-                status="Taking chest contents (next slot "+(lootSlotCursor+1)+"/"+size+")";
-            }else if(++failedClicks>=3){
-                failedClicks=0;
-                status="Some items could not be moved. Inventory may be full; keeping chest open.";
-            }
-            return;
-        }
-
-        // Do not close after a failed shift-click. The GUI closes only after every
-        // lower-chest slot is confirmed empty.
-        if(++lootEmptyTicks<2)return;
+        // Chest detection is enough: do not inspect, click, or transfer any contents.
         p.closeScreen();
-        finish(true);
+        finish(false);
+        status="Chest opened and GUI closed without looting";
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
