@@ -28,6 +28,17 @@ public final class Pathfinder {
                 addVertical(world,cur.pos,-1,verticalKind,cur.g,goals,best,parents,open);
             }
 
+            // A one-block opening may be directly below the player (for example the
+            // Sewer iron-bar gap). Permit a pure vertical gravity drop without requiring
+            // an artificial horizontal step first.
+            for(int dy=-1;dy>=-maxFall;dy--){
+                BlockPos landing=cur.pos.add(0,dy,0);
+                if(!world.canStand(landing)||world.hazard(landing))continue;
+                if(!dropArcClear(world,cur.pos,landing,0,0))continue;
+                relax(landing,MovementKind.DROP,cur.pos,
+                        cur.g+Math.max(0.0D,world.extraCost(landing)),goals,best,parents,open);
+            }
+
             for(int[] d:DIRS){
                 boolean diagonal=d[0]!=0&&d[1]!=0;
                 boolean cornerClear=!diagonal||
