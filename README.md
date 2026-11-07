@@ -13,7 +13,7 @@ Press **G** to start or stop Geode.
 
 1. Prioritize the LaunchPad column at `(16, 95, 16)`; only use nearby safe cells if the exact column cannot be occupied.
 2. Wait for the LaunchPad to launch the player downward. Geode waits for the player to land before planning the next route.
-3. Scan around `(47, 66, 75)` for an opening in the iron-bar floor, using the collision snapshot to check the player-sized gap and nearby iron-bar frame.
+3. Scan within the configurable gate radius (default 12 blocks) around `(47, 66, 75)` for an opening in a framed floor/railing structure. Detection recognizes iron bars, panes, fences, walls, and opaque solid frame blocks rather than relying on one exact block ID.
 4. Find supported standing cells beside each opening. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
 5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
 6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
@@ -29,7 +29,7 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
-- A dedicated GatePlanner detects iron-bar openings and their supported approach cells; it does not require a landing directly underneath the opening.
+- A dedicated GatePlanner detects openings using generic collision barriers and their supported approach cells; it does not require a landing directly underneath the opening.
 - The movement controller steps from the chosen approach into the hole and requires a runtime downward-crossing check at the grate plane before Sewer entry.
 - The HUD displays the detected gap, grate height, crossing verification, current state, target chest, and expanded A* node count.
 - The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
@@ -55,5 +55,5 @@ The JAR should be written to `build/libs/Geode-0.1.0.jar`.
 
 - Chest detection is limited to tile entities in chunks currently loaded by the client. Geode patrols nearby waypoints to load more chunks; it cannot inspect unloaded chunks remotely.
 - The chat announcement contains no chest coordinates.
-- The iron-bar detector searches within four blocks horizontally and scans down from the player's current feet layer through the configured maximum fall distance. It accepts staggered bars around the shaft and requires a clear two-block player column and a safe landing below. If the hole is outside the search region or the grate is not made of vanilla iron bars, the HUD reports scan counts.
+- The gate detector searches within `gateScanRadius` (default 12 blocks) and scans down from the player's current feet layer through the configured maximum fall distance. It recognizes iron bars, panes, fences, walls, and opaque blocks around the opening. If the opening is outside the search region or its surrounding blocks do not create a detectable frame, the HUD reports scan counts.
 - The runtime grate-crossing check and the actual movement through the opening still need validation in the running remake world.
