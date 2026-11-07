@@ -52,6 +52,32 @@ jobs:
       - name: Run unit tests and build mod
         run: gradle --no-daemon test build --stacktrace
 
+      - name: Verify JUnit results
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          reports = glob.glob("build/test-results/test/TEST-*.xml")
+          if not reports:
+              raise SystemExit("No JUnit XML reports were produced.")
+
+          total = 0
+          failures = 0
+          errors = 0
+          for report in reports:
+              root = ET.parse(report).getroot()
+              total += int(root.attrib.get("tests", 0))
+              failures += int(root.attrib.get("failures", 0))
+              errors += int(root.attrib.get("errors", 0))
+
+          print("JUnit tests: %d; failures: %d; errors: %d" % (total, failures, errors))
+          if total < 1 or failures or errors:
+              raise SystemExit("JUnit verification failed.")
+          PY
+
       - name: Verify output JAR
         shell: bash
         run: |
