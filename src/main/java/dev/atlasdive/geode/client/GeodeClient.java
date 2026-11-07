@@ -35,12 +35,14 @@ public final class GeodeClient {
     private Stage stage=Stage.IDLE;
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
-    private BlockPos chest,lastStart,gateLanding,gateDropSource;
+    private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates,gateEntryTicks;
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,
+            patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks;
+    private boolean patrolComplete;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
@@ -96,7 +98,8 @@ public final class GeodeClient {
         if(mc.thePlayer!=null){
             mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,73,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,84,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,84,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,95,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -132,7 +135,9 @@ public final class GeodeClient {
             tell("This host is blocked. Add its exact hostname to config/geode.cfg.");return;
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;emptyScans=0;patrol=0;failedGateApproaches.clear();resetGateState();
+        cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
+        patrolOrigin=null;patrolWaypoint=null;patrolComplete=false;
+        failedGateApproaches.clear();resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
     }
     private void stop(String why){
@@ -143,7 +148,15 @@ public final class GeodeClient {
         if(future!=null){movement.stop();return;}
         if(!movement.hasPath()){if(ticks>=retryTicks)reRoute(p,w);return;}
         movement.tick(p);
-        if(movement.stuck()){movement.stop();retryTicks=ticks+5;status="Blocked - recalculating path";return;}
+        if(movement.stuck()){
+            movement.stop();
+            if(stage==Stage.PATROL){
+                skipPatrolWaypoint("Patrol waypoint blocked; advancing to the next spiral point");
+            }else{
+                retryTicks=ticks+5;status="Blocked - recalculating path";
+            }
+            return;
+        }
         if(movement.complete()){movement.stop();arrived(p,w);}
     }
     private void arrived(EntityPlayerSP p,World w){
@@ -162,7 +175,11 @@ public final class GeodeClient {
                 status="Gate approach target missing; replanning";
             }
         }else if(stage==Stage.TO_CHEST){stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;}
-        else if(stage==Stage.PATROL){stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Patrol point reached - scanning again";}
+        else if(stage==Stage.PATROL){
+            patrolLeg++;patrolFailures=0;patrolWaypoint=null;
+            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            status="Patrol point reached; scanning the newly loaded area";
+        }
     }
     private void reRoute(EntityPlayerSP p,World w){
         if(stage==Stage.TO_LAUNCH)routeLaunch(p,w);
@@ -188,9 +205,38 @@ public final class GeodeClient {
                 c.add(1,-1,0),c.add(-1,-1,0),c.add(0,-1,1),c.add(0,-1,-1)),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
-        int[][] ring={{0,-12},{8,-8},{12,0},{8,8},{0,12},{-8,8},{-12,0},{-8,-8}};
-        int[] o=ring[patrol++%ring.length];int x=GATE.x+o[0],z=GATE.z+o[1],y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+        if(patrolComplete){
+            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            status="Patrol coverage exhausted; continuing to scan loaded Sewer chunks";
+            return;
+        }
+        if(patrolOrigin==null)patrolOrigin=playerPos(p);
+        int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+        patrolWaypoint=PatrolPlanner.waypoint(patrolOrigin,patrolLeg,y);
+        int patrolRadius=Math.max(4,GeodeConfig.scanRadius-3);
+        if(!PatrolPlanner.insideHorizontalRadius(patrolWaypoint,GATE,patrolRadius)){
+            patrolComplete=true;patrolWaypoint=null;
+            stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            status="Patrol perimeter reached; scanning loaded Sewer chunks";
+            return;
+        }
+        int x=patrolWaypoint.x,z=patrolWaypoint.z;
+        status="Planning expanding patrol leg "+patrolLeg+" toward "+patrolWaypoint;
         route(p,w,box(x-2,x+2,y-3,y+3,z-2,z+2),"Sewer patrol");
+    }
+
+    private void skipPatrolWaypoint(String reason){
+        patrolLeg++;
+        patrolFailures++;
+        patrolWaypoint=null;
+        retryTicks=ticks+5;
+        status=reason+" (leg "+patrolLeg+")";
+        if(patrolFailures>=12){
+            patrolComplete=true;
+            stage=Stage.SEEK;
+            scanTicks=GeodeConfig.scanIntervalTicks;
+            status="Patrol stalled; scanning the currently loaded Sewer area";
+        }
     }
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
         if(future!=null)future.cancel(true);movement.stop();
@@ -226,7 +272,16 @@ public final class GeodeClient {
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
         }else{
-            for(BlockPos g:rough)if(snap.canStand(g))goals.add(g);
+            for(BlockPos g:rough){
+                if(!snap.canStand(g))continue;
+                if("Sewer patrol".equals(why)){
+                    long dx=(long)g.x-start.x,dz=(long)g.z-start.z;
+                    // Never accept the player's current cell or a nearby cell as a
+                    // patrol destination; that creates zero-distance patrol loops.
+                    if(dx*dx+dz*dz<25L)continue;
+                }
+                goals.add(g);
+            }
         }
         if(goals.isEmpty()&&"LaunchPad".equals(why)){
             for(int x=LAUNCH.x-1;x<=LAUNCH.x+1;x++)for(int y=LAUNCH.y-1;y<=LAUNCH.y+2;y++)
@@ -236,13 +291,21 @@ public final class GeodeClient {
         }
         goalCandidates=goals.size();
         if(goals.isEmpty()){
-            status="No standable goal cells for "+why+" near "+(rough.isEmpty()?"target":rough.get(0));
-            retryTicks=ticks+40;
+            if("Sewer patrol".equals(why)){
+                skipPatrolWaypoint("No loaded standable cells at this patrol waypoint");
+            }else{
+                status="No standable goal cells for "+why+" near "+(rough.isEmpty()?"target":rough.get(0));
+                retryTicks=ticks+40;
+            }
             return;
         }
         if(!snap.canStand(start)){
-            status="Start position is not standable in snapshot: "+start;
-            retryTicks=ticks+20;
+            if("Sewer patrol".equals(why)){
+                skipPatrolWaypoint("Patrol start cell is not standable");
+            }else{
+                status="Start position is not standable in snapshot: "+start;
+                retryTicks=ticks+20;
+            }
             return;
         }
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
@@ -268,10 +331,14 @@ public final class GeodeClient {
                     gateCrossed=false;
                     previousGateFeet=p.getEntityBoundingBox().minY;
                     status="Path to gate approach ready: "+approach+"; opening "+aperture;
+                }else if(stage==Stage.PATROL){
+                    status="Sewer patrol leg "+patrolLeg+" path ready ("+r.steps.size()+" steps) toward "+patrolWaypoint;
                 }else{
                     status=purpose+" path ready ("+r.steps.size()+" steps)";
                 }
                 movement.setPath(r.steps,p);
+            }else if(stage==Stage.PATROL){
+                skipPatrolWaypoint("No path to patrol waypoint ("+r.expanded+" nodes)");
             }else{
                 status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";
                 retryTicks=ticks+40;
