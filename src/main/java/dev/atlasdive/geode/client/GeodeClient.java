@@ -214,15 +214,9 @@ public final class GeodeClient {
         route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
-        List<BlockPos> approaches=new ArrayList<BlockPos>();
-        // A chest may be on a ledge, at the bottom of a pit, or behind a partial
-        // block. Consider a wider ring and several standing heights around it.
-        for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
-            if(dx==0&&dz==0)continue;
-            if(dx*dx+dz*dz>9)continue;
-            for(int dy=-3;dy<=3;dy++)approaches.add(c.add(dx,dy,dz));
-        }
-        route(p,w,approaches,"chest "+c);
+        // Search a three-block ring and multiple Y levels so distant/raised chests
+        // do not depend on one of only eight same-height adjacent blocks.
+        route(p,w,ChestApproachPlanner.candidates(c,3,3),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
         if(patrolComplete){
