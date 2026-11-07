@@ -95,8 +95,8 @@ public final class GeodeClient {
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
         mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Chest scan: loaded "+loadedChestTiles+" | in range "+inRangeChestTiles
-                +" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chest scan r="+GeodeConfig.scanRadius+" | loaded "+loadedChestTiles
+                +" | in range "+inRangeChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,73,0xAAAAAA);
         if(mc.thePlayer!=null){
             mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,84,0xAAAAAA);
