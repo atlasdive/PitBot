@@ -11,9 +11,9 @@
 
 Press **G** to start or stop Geode.
 
-1. Build a path to the LaunchPad area around `(16, 95, 16)`.
+1. Prioritize the LaunchPad column at `(16, 95, 16)`; only use nearby safe cells if the exact column cannot be occupied.
 2. Wait for the LaunchPad to launch the player downward. Geode waits for the player to land before planning the next route.
-3. Use the 3D pathfinder to reach the narrow target region around the iron-bar gap at `(47, 66, 75)`. The actual collision boxes determine which cells are traversable.
+3. Prioritize the vertical opening column at `(47, 66, 75)`. The pathfinder can fall straight down through a clear shaft, and only widens to nearby landing cells if the exact column has no safe landing.
 4. Once the player is grounded below the gate area, scan loaded tile entities for existing chests.
 5. Pathfind to a standing position beside a chest, open it, shift-click its contents into the player's inventory, then continue scanning.
 6. If no chest is found after several scans, patrol nearby waypoints to load more chunks.
@@ -25,7 +25,7 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 - 3D A* with multiple goal positions.
 - Collision snapshot is captured on the client thread; A* runs on a background worker.
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
-- Drop movement has **zero extra fall-risk cost**. Void/unlandable cells and lava, fire, and cactus are still rejected.
+- Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
 - The HUD displays the current state, target chest, and expanded A* node count.
 - The active route is drawn in-world: cyan for normal movement, yellow for jumps/steps, and orange for drops.
