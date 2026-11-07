@@ -283,6 +283,8 @@ public final class GeodeClient {
         // Always scan loaded tile entities. The chat announcement is only an optional early trigger.
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
+            // Ignore the explicitly excluded lobby/structure chest cuboid (inclusive bounds).
+            if(isExcludedChest(pos.getX(),pos.getY(),pos.getZ()))continue;
             if(Math.abs(pos.getX()-GATE.x)>GeodeConfig.scanRadius||Math.abs(pos.getZ()-GATE.z)>GeodeConfig.scanRadius
                     ||pos.getY()<GATE.y-28||pos.getY()>GATE.y+8)continue;
             BlockPos c=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
@@ -293,6 +295,10 @@ public final class GeodeClient {
         else if(++emptyScans>=5){emptyScans=0;stage=Stage.PATROL;routePatrol(p,w);}
         else status="No loaded Sewer chest; scanning again";
     }
+    private boolean isExcludedChest(int x,int y,int z){
+        return x>=19&&x<=23&&y>=66&&y<=70&&z>=72&&z<=82;
+    }
+
     private void openChest(EntityPlayerSP p,World w){
         if(chest==null){stage=Stage.SEEK;return;}
         net.minecraft.util.BlockPos bp=new net.minecraft.util.BlockPos(chest.x,chest.y,chest.z);
