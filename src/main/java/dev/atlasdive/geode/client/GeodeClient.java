@@ -51,7 +51,7 @@ public final class GeodeClient {
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
     private int loadedChestTiles,excludedChestTiles;
     private boolean patrolTransit;
@@ -631,7 +631,7 @@ public final class GeodeClient {
     /**
      * Searches every chest tile entity in client-loaded chunks, without a horizontal
      * distance or Y restriction. A chest is considered a Sewer chest only when a
-     * recent particle position was observed within the configured radius.
+     * all loaded chest tile entities are eligible unless they are in the excluded area.
      */
     private BlockPos findNearestLoadedChest(EntityPlayerSP p,World w){
         BlockPos best=null;
@@ -665,7 +665,7 @@ public final class GeodeClient {
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
         if(mc.currentScreen instanceof GuiChest&&p.openContainer instanceof ContainerChest){
-            stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;failedClicks=0;return;
+            stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
         if(ticks<retryTicks)return;
@@ -675,7 +675,7 @@ public final class GeodeClient {
     }
     private void lootChest(EntityPlayerSP p){
         if(!(mc.currentScreen instanceof GuiChest)||!(p.openContainer instanceof ContainerChest)){
-            finish();
+            finish(false);
             return;
         }
         ContainerChest container=(ContainerChest)p.openContainer;
@@ -688,6 +688,7 @@ public final class GeodeClient {
             int slot=(lootSlotCursor+offset)%size;
             ItemStack before=inventory.getStackInSlot(slot);
             if(before==null)continue;
+            lootEmptyTicks=0;
             if(!lootTimer.isReady())return;
 
             int beforeCount=before.stackSize;
@@ -707,13 +708,14 @@ public final class GeodeClient {
 
         // Do not close after a failed shift-click. The GUI closes only after every
         // lower-chest slot is confirmed empty.
+        if(++lootEmptyTicks<2)return;
         p.closeScreen();
-        finish();
+        finish(true);
     }
-    private void finish(){
+    private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
-        chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootTimer.reset();
-        status="Chest emptied and GUI closed; searching for next";
+        chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootEmptyTicks=0;lootTimer.reset();
+        status=emptied?"Chest emptied and GUI closed; searching for next":"Chest GUI closed; searching for next";
     }
     private void tickGateEntry(EntityPlayerSP p){
         if(gateLanding==null){setGateKeys(false);stage=Stage.TO_GATE;retryTicks=ticks+5;return;}
