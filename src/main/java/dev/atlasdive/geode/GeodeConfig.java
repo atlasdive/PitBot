@@ -35,6 +35,15 @@ public final class GeodeConfig {
         }
         maxExpandedNodes = config.getInt("maxExpandedNodes", "pathfinding", 75000, 5000, 150000,
                 "Maximum A* nodes expanded in one request.");
+        int pathBudgetMigration = config.getInt("pathBudgetMigration", "pathfinding", 0, 0, 1,
+                "Internal config migration marker.");
+        if (pathBudgetMigration == 0) {
+            if (maxExpandedNodes == 45000) {
+                maxExpandedNodes = 75000;
+                config.get("pathfinding", "maxExpandedNodes", 75000).set(75000);
+            }
+            config.get("pathfinding", "pathBudgetMigration", 1).set(1);
+        }
         maxFallBlocks = config.getInt("maxFallBlocks", "pathfinding", 48, 1, 96,
                 "Maximum vertical drop considered. Falls have no extra damage penalty.");
         gateScanRadius = config.getInt("gateScanRadius", "pathfinding", 12, 4, 24,
