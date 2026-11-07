@@ -87,9 +87,11 @@ public final class GatePlanner {
     }
 
     private boolean clearPlayerColumn(PathWorld world,int x,int z,int fromY,int throughY){
+        // throughY is the head block of the last tested player position.
+        // Check each occupied block once (the previous version accidentally
+        // required three full air blocks above the opening).
         for(int y=fromY;y<=throughY;y++){
-            BlockPos feet=new BlockPos(x,y,z);
-            if(!world.clear(feet)||!world.clear(feet.add(0,1,0)))return false;
+            if(!world.clear(new BlockPos(x,y,z)))return false;
         }
         return true;
     }
