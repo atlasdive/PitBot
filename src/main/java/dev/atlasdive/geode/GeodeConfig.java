@@ -11,6 +11,7 @@ public final class GeodeConfig {
     public static int scanRadius = 32;
     public static int maxExpandedNodes = 45000;
     public static int maxFallBlocks = 48;
+    public static int gateScanRadius = 12;
 
     private GeodeConfig() {}
 
@@ -26,6 +27,8 @@ public final class GeodeConfig {
                 "Maximum A* nodes expanded in one request.");
         maxFallBlocks = config.getInt("maxFallBlocks", "pathfinding", 48, 1, 96,
                 "Maximum vertical drop considered. Falls have no extra damage penalty.");
+        gateScanRadius = config.getInt("gateScanRadius", "pathfinding", 12, 4, 24,
+                "Horizontal search radius around the approximate Sewer gate marker.");
         if (config.hasChanged()) config.save();
     }
 
