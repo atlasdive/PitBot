@@ -358,11 +358,23 @@ public final class GeodeClient {
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
         if(future!=null)future.cancel(true);movement.stop();
         BlockPos start=playerPos(p);
-        PathNode startNode=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
+        PathNode requestedStart=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
         lastStart=start;
         List<PathNode> captureGoals=new ArrayList<PathNode>();
         for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
-        MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,startNode,captureGoals);
+        MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
+        PathNode resolvedStart=requestedStart;
+        if(!snap.canStand(resolvedStart)){
+            double nearest=Double.POSITIVE_INFINITY;
+            for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
+                PathNode candidate=new PathNode(requestedStart.x,requestedStart.y2,requestedStart.z,lane);
+                if(!snap.canStand(candidate))continue;
+                double dx=candidate.worldX()-p.posX,dz=candidate.worldZ()-p.posZ;
+                double distance=dx*dx+dz*dz;
+                if(distance<nearest){nearest=distance;resolvedStart=candidate;}
+            }
+        }
+        final PathNode pathStart=resolvedStart;
         List<BlockPos> goals=new ArrayList<BlockPos>();
         List<PathNode> pathGoals=new ArrayList<PathNode>();
         if("Sewer opening".equals(why)){
@@ -445,7 +457,7 @@ public final class GeodeClient {
             }
             return;
         }
-        if(!snap.canStand(startNode)){
+        if(!snap.canStand(pathStart)){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("Patrol start cell is not standable");
             }else if("chest scaffold staging".equals(why)&&chest!=null){
@@ -457,7 +469,7 @@ public final class GeodeClient {
             return;
         }
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
-        future=worker.submit(()->new Pathfinder().findNodes(snap,startNode,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        future=worker.submit(()->new Pathfinder().findNodes(snap,pathStart,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
     }
     private void collectResult(EntityPlayerSP p){
         if(future==null||!future.isDone())return;

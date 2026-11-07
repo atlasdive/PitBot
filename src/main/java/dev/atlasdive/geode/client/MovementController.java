@@ -51,8 +51,10 @@ public final class MovementController {
             if(step.kind==MovementKind.SWIM){
                 steer(player,dx,dz);
                 float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
-                boolean aligned=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw))<=95.0F;
-                setForward(aligned);setJump(vertical>0.12D);setSneak(vertical< -0.12D);
+                boolean aligned=distance<=0.08D
+                        ||Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw))<=95.0F;
+                setForward(distance>0.08D&&aligned);
+                setJump(vertical>0.12D);setSneak(vertical< -0.12D);
                 setSprint(false);trackProgress(metric);return;
             }
             if(step.kind==MovementKind.CLIMB&&distance<=0.72D&&Math.abs(vertical)>0.25D){

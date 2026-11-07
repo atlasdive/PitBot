@@ -41,7 +41,8 @@ public final class Pathfinder {
             for(int dyHalf=-1;dyHalf>=-maxFall*2;dyHalf--){
                 PathNode landing=cur.pos.add(0,dyHalf,0);
                 if(!world.canStand(landing)||world.hazard(landing)||!dropArcClear(world,cur.pos,landing,0,0))continue;
-                MovementKind kind=(world.liquid(cur.pos)||world.liquid(landing))?MovementKind.SWIM:
+                MovementKind kind=dyHalf< -1&&!world.liquid(landing)?MovementKind.DROP:
+                        (world.liquid(cur.pos)||world.liquid(landing))?MovementKind.SWIM:
                         dyHalf==-1?MovementKind.STEP_DOWN:MovementKind.DROP;
                 relax(landing,kind,cur.pos,cur.g+Math.max(0.0D,world.extraCost(landing)),
                         goals,best,parents,open);
@@ -51,30 +52,26 @@ public final class Pathfinder {
                 boolean cornerClear=!diagonal||
                         (world.clear(cur.pos.add(d[0],0,0))&&world.clear(cur.pos.add(0,0,d[1])));
                 if(!cornerClear)continue;
-                for(int dyHalf=2;dyHalf>=-maxFall*2;dyHalf--){
+                // Nearby stair/slab height changes can use every lane. Long drops are
+                // considered separately at whole-block intervals to keep A* bounded.
+                for(int dyHalf=2;dyHalf>=-2;dyHalf--){
                     for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
                         PathNode next=new PathNode(cur.pos.x+d[0],cur.pos.y2+dyHalf,cur.pos.z+d[1],lane);
-                        if(!world.canStand(next)||world.hazard(next)||!world.transitionClear(cur.pos,next))continue;
-                        MovementKind kind;
-                        if(world.liquid(next)||world.liquid(cur.pos))kind=MovementKind.SWIM;
-                        else if(dyHalf>0){
-                            kind=MovementKind.STEP_UP;
-                            if(dyHalf>1&&!world.jumpArcClear(cur.pos,next))continue;
-                        }else if(dyHalf==-1)kind=MovementKind.STEP_DOWN;
-                        else if(dyHalf<0){
-                            kind=MovementKind.DROP;
-                            if(!dropArcClear(world,cur.pos,next,d[0],d[1]))continue;
-                        }else if(world.climbable(next))kind=MovementKind.CLIMB;
-                        else kind=MovementKind.WALK;
+                        addHorizontalTransition(world,cur.pos,next,dyHalf,d[0],d[1],goals,best,parents,open,cur.g);
+                    }
+                }
+                for(int dyHalf=-4;dyHalf>=-maxFall*2;dyHalf-=2){
+                    int[] dropLanes=cur.pos.lane==PathNode.CENTER
+                            ?new int[]{PathNode.CENTER}
+                            :new int[]{cur.pos.lane,PathNode.CENTER};
+                    for(int lane:dropLanes){
+                        PathNode next=new PathNode(cur.pos.x+d[0],cur.pos.y2+dyHalf,cur.pos.z+d[1],lane);
+                        if(!world.canStand(next)||world.hazard(next)||!dropArcClear(world,cur.pos,next,d[0],d[1]))continue;
+                        MovementKind kind=world.liquid(next)?MovementKind.SWIM:MovementKind.DROP;
                         double horizontal=Math.sqrt(d[0]*d[0]+d[1]*d[1]);
-                        double vertical=Math.abs(dyHalf)*0.5D;
                         double lanePenalty=lane==cur.pos.lane?0.0D:0.18D;
-                        double stepCost=horizontal+lanePenalty;
-                        if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
-                        else if(kind==MovementKind.SWIM)stepCost+=0.6D;
-                        else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
-                        relax(next,kind,cur.pos,cur.g+stepCost+Math.max(0.0D,world.extraCost(next)),
-                                goals,best,parents,open);
+                        relax(next,kind,cur.pos,cur.g+horizontal+lanePenalty
+                                +Math.max(0.0D,world.extraCost(next)),goals,best,parents,open);
                     }
                 }
                 PathNode jump=new PathNode(cur.pos.x+d[0]*2,cur.pos.y2,cur.pos.z+d[1]*2,cur.pos.lane);
@@ -87,6 +84,32 @@ public final class Pathfinder {
             if(Thread.currentThread().isInterrupted())break;
         }
         return new PathResult(Collections.<PathStep>emptyList(),expanded);
+    }
+    private static void addHorizontalTransition(PathWorld world,PathNode from,PathNode next,int dyHalf,
+            int dx,int dz,List<PathNode> goals,Map<PathNode,Double> best,Map<PathNode,Parent> parents,
+            PriorityQueue<Entry> open,double base){
+        if(!world.canStand(next)||world.hazard(next)||!world.transitionClear(from,next))return;
+        MovementKind kind;
+        if(dyHalf< -1&&!world.liquid(next))kind=MovementKind.DROP;
+        else if(world.liquid(next)||world.liquid(from))kind=MovementKind.SWIM;
+        else if(dyHalf>0){
+            kind=MovementKind.STEP_UP;
+            if(dyHalf>1&&!world.jumpArcClear(from,next))return;
+        }else if(dyHalf==-1)kind=MovementKind.STEP_DOWN;
+        else if(dyHalf<0){
+            kind=MovementKind.DROP;
+            if(!dropArcClear(world,from,next,dx,dz))return;
+        }else if(world.climbable(next))kind=MovementKind.CLIMB;
+        else kind=MovementKind.WALK;
+        double horizontal=Math.sqrt(dx*dx+dz*dz);
+        double vertical=Math.abs(dyHalf)*0.5D;
+        double lanePenalty=next.lane==from.lane?0.0D:0.18D;
+        double stepCost=horizontal+lanePenalty;
+        if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
+        else if(kind==MovementKind.SWIM)stepCost+=0.6D;
+        else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
+        relax(next,kind,from,base+stepCost+Math.max(0.0D,world.extraCost(next)),
+                goals,best,parents,open);
     }
     private static void relax(PathNode next,MovementKind kind,PathNode from,double g,List<PathNode> goals,
             Map<PathNode,Double> best,Map<PathNode,Parent> parents,PriorityQueue<Entry> open){
