@@ -189,7 +189,7 @@ public final class GeodeClient {
         Future<PathResult> f=future;future=null;
         try{
             PathResult r=f.get();
-            expandedNodes=r.expandedNodes;
+            expandedNodes=r.expanded;
             if(r.found()){movement.setPath(r.steps,p);status=purpose+" path ready ("+r.steps.size()+" steps)";}
             else{status="No path to "+purpose+"; retrying";retryTicks=ticks+30;}
         }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
