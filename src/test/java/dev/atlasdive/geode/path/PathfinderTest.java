@@ -60,6 +60,7 @@ public class PathfinderTest {
         public boolean hazard(BlockPos p){return false;}
         public boolean climbable(BlockPos p){return false;}
         public boolean liquid(BlockPos p){return false;}
+        public boolean ironBars(BlockPos p){return false;}
         public double extraCost(BlockPos p){return 0D;}
         public boolean jumpArcClear(BlockPos a,BlockPos b){return true;}
         public boolean lineClear(BlockPos a,BlockPos b){return a.y==b.y&&clear(a)&&clear(b);}
