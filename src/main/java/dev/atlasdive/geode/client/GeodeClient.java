@@ -38,6 +38,7 @@ public final class GeodeClient {
     private BlockPos chest,lastStart,gateLanding,gateDropSource;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
+    private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates,gateEntryTicks;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
@@ -131,7 +132,7 @@ public final class GeodeClient {
             tell("This host is blocked. Add its exact hostname to config/geode.cfg.");return;
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;emptyScans=0;patrol=0;resetGateState();
+        cooldown.clear();chest=null;emptyScans=0;patrol=0;failedGateApproaches.clear();resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
     }
     private void stop(String why){
@@ -213,7 +214,13 @@ public final class GeodeClient {
             gatePlaneY=plan.planeY;
             gateColumns.clear();gateColumns.addAll(plan.columns);
             gateApproachMap.clear();gateApproachMap.putAll(plan.approachToAperture);
-            goals.addAll(plan.approaches);
+            for(BlockPos approach:plan.approaches){
+                if(!failedGateApproaches.contains(approach))goals.add(approach);
+            }
+            if(goals.isEmpty()){
+                failedGateApproaches.clear();
+                goals.addAll(plan.approaches);
+            }
             goalCandidates=goals.size();
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
@@ -334,6 +341,14 @@ public final class GeodeClient {
         if(distance<0.16D){
             setGateKeys(false);
             status="Aligned with iron-bar opening; waiting to drop";
+            if(gateEntryTicks>60){
+                failedGateApproaches.add(gateDropSource);
+                stage=Stage.TO_GATE;
+                gateLanding=null;gateDropSource=null;gateCrossed=false;
+                previousGateFeet=Double.NaN;
+                retryTicks=ticks+5;
+                status="Opening did not release player; trying another approach side";
+            }
             return;
         }
 
@@ -350,9 +365,11 @@ public final class GeodeClient {
 
         if(gateEntryTicks>120){
             setGateKeys(false);
+            failedGateApproaches.add(gateDropSource);
             stage=Stage.TO_GATE;
             gateLanding=null;gateDropSource=null;gateCrossed=false;
-            retryTicks=ticks+10;
+            previousGateFeet=Double.NaN;
+            retryTicks=ticks+5;
             status="Could not enter selected opening; choosing another approach";
         }
     }
@@ -362,8 +379,8 @@ public final class GeodeClient {
         double feet=p.getEntityBoundingBox().minY;
         if(!Double.isNaN(previousGateFeet)){
             boolean fallingThrough=previousGateFeet>=gatePlaneY-0.02D&&feet<gatePlaneY-0.02D;
-            boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.40D
-                    &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.40D;
+            boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.30D
+                    &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.30D;
             if(fallingThrough&&centered){
                 gateCrossed=true;
                 stage=Stage.WAIT_GATE_LANDING;
@@ -411,6 +428,7 @@ public final class GeodeClient {
 
     private void resetGateState(){
         gateLanding=null;gateDropSource=null;gateColumns.clear();gateApproachMap.clear();
+        failedGateApproaches.clear();
         gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;gateEntryTicks=0;
         if(mc!=null)setGateKeys(false);
     }
