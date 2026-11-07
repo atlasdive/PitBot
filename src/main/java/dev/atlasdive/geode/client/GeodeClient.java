@@ -35,8 +35,8 @@ public final class GeodeClient {
     private Stage stage=Stage.IDLE;
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route";
-    private BlockPos chest;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes;
+    private BlockPos chest,lastStart;
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates;
     private double launchY,launchX,launchZ;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
 
@@ -81,8 +81,11 @@ public final class GeodeClient {
         mc.fontRendererObj.drawStringWithShadow("Geode "+(running?"ON":"OFF")+" | "+stage,7,7,running?0x55FF55:0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(status,7,18,0xFFFFFF);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,29,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Expanded nodes: "+expandedNodes,7,40,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,51,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded nodes: "+expandedNodes+" | Goals: "+goalCandidates,7,40,0xAAAAAA);
+        if(mc.thePlayer!=null){
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,51,0xAAAAAA);
+        }
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,62,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -150,8 +153,16 @@ public final class GeodeClient {
     }
     private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
     private void routeGate(EntityPlayerSP p,World w){
-        // Prefer the supplied gap column; only widen if no collision-safe landing exists there.
-        route(p,w,box(47,47,46,65,75,75),"Sewer opening");
+        // The gate coordinate marks the hole, not necessarily a standable block.
+        // Build candidate landing cells around the hole on the Sewer side of the grate.
+        List<BlockPos> goals=new ArrayList<BlockPos>();
+        for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
+            if(dx*dx+dz*dz>12)continue;
+            for(int y=GATE.y-32;y<GATE.y;y++){
+                goals.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
+            }
+        }
+        route(p,w,goals,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
         route(p,w,Arrays.asList(c.add(1,0,0),c.add(-1,0,0),c.add(0,0,1),c.add(0,0,-1),
@@ -165,6 +176,7 @@ public final class GeodeClient {
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
         if(future!=null)future.cancel(true);movement.stop();
         BlockPos start=playerPos(p);
+        lastStart=start;
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
         List<BlockPos> goals=new ArrayList<BlockPos>();
         for(BlockPos g:rough)if(snap.canStand(g))goals.add(g);
@@ -174,14 +186,18 @@ public final class GeodeClient {
                     BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
                 }
         }
-        if(goals.isEmpty()&&"Sewer opening".equals(why)){
-            for(int x=GATE.x-3;x<=GATE.x+3;x++)for(int y=GATE.y-28;y<=GATE.y-1;y++)
-                for(int z=GATE.z-3;z<=GATE.z+3;z++){
-                    BlockPos g=new BlockPos(x,y,z);if(snap.canStand(g))goals.add(g);
-                }
+        goalCandidates=goals.size();
+        if(goals.isEmpty()){
+            status="No standable goal cells for "+why+" near "+(rough.isEmpty()?"target":rough.get(0));
+            retryTicks=ticks+40;
+            return;
         }
-        if(goals.isEmpty()){status="Waiting for target chunks to load: "+why;retryTicks=ticks+40;return;}
-        purpose=why;status="Computing "+why+" path...";
+        if(!snap.canStand(start)){
+            status="Start position is not standable in snapshot: "+start;
+            retryTicks=ticks+20;
+            return;
+        }
+        purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
         future=worker.submit(()->new Pathfinder().find(snap,start,goals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
     }
     private void collectResult(EntityPlayerSP p){
@@ -191,7 +207,7 @@ public final class GeodeClient {
             PathResult r=f.get();
             expandedNodes=r.expanded;
             if(r.found()){movement.setPath(r.steps,p);status=purpose+" path ready ("+r.steps.size()+" steps)";}
-            else{status="No path to "+purpose+"; retrying";retryTicks=ticks+30;}
+            else{status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";retryTicks=ticks+40;}
         }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
     }
     private void findChest(EntityPlayerSP p,World w){
