@@ -16,6 +16,8 @@ import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
+import net.minecraftforge.client.event.RenderWorldLastEvent;
+import org.lwjgl.opengl.GL11;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import org.lwjgl.input.Keyboard;
@@ -34,7 +36,7 @@ public final class GeodeClient {
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route";
     private BlockPos chest;
-    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol;
+    private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes;
     private double launchY,launchX,launchZ;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
 
@@ -79,7 +81,34 @@ public final class GeodeClient {
         mc.fontRendererObj.drawStringWithShadow("Geode "+(running?"ON":"OFF")+" | "+stage,7,7,running?0x55FF55:0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(status,7,18,0xFFFFFF);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,29,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,40,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded nodes: "+expandedNodes,7,40,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,51,0xAAAAAA);
+    }
+
+    @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
+        if(!running||!movement.hasPath()||mc.theWorld==null)return;
+        List<PathStep> steps=movement.getPath();
+        if(steps.size()<2)return;
+        net.minecraft.client.renderer.entity.RenderManager rm=mc.getRenderManager();
+        int first=Math.max(1,movement.getIndex());
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT|GL11.GL_LINE_BIT|GL11.GL_CURRENT_BIT|GL11.GL_DEPTH_BUFFER_BIT);
+        GL11.glDisable(GL11.GL_TEXTURE_2D);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA,GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glLineWidth(2.0F);
+        GL11.glDepthMask(false);
+        for(int i=first;i<steps.size();i++){
+            PathStep a=steps.get(i-1),b=steps.get(i);
+            if(b.kind==MovementKind.DROP)GL11.glColor4f(1.0F,0.62F,0.16F,0.95F);
+            else if(b.kind==MovementKind.JUMP||b.kind==MovementKind.STEP_UP)GL11.glColor4f(0.95F,0.85F,0.20F,0.95F);
+            else GL11.glColor4f(0.20F,0.85F,1.0F,0.90F);
+            GL11.glBegin(GL11.GL_LINES);
+            GL11.glVertex3d(a.pos.x+0.5D-rm.viewerPosX,a.pos.y+0.08D-rm.viewerPosY,a.pos.z+0.5D-rm.viewerPosZ);
+            GL11.glVertex3d(b.pos.x+0.5D-rm.viewerPosX,b.pos.y+0.08D-rm.viewerPosY,b.pos.z+0.5D-rm.viewerPosZ);
+            GL11.glEnd();
+        }
+        GL11.glDepthMask(true);
+        GL11.glPopAttrib();
     }
 
     private void toggle(){if(running){stop("Stopped by user");tell("Geode stopped.");}else start();}
@@ -160,6 +189,7 @@ public final class GeodeClient {
         Future<PathResult> f=future;future=null;
         try{
             PathResult r=f.get();
+            expandedNodes=r.expandedNodes;
             if(r.found()){movement.setPath(r.steps,p);status=purpose+" path ready ("+r.steps.size()+" steps)";}
             else{status="No path to "+purpose+"; retrying";retryTicks=ticks+30;}
         }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
