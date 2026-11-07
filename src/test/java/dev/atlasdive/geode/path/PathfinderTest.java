@@ -62,6 +62,26 @@ public class PathfinderTest {
         assertEquals(new BlockPos(1,5,0),path.steps.get(path.steps.size()-1).pos);
     }
 
+    @Test public void gatePlannerProvidesApproachUpToFourBlocksFromOpening(){
+        TestWorld world=new TestWorld();
+        world.support.clear();
+        world.support.add(new BlockPos(4,5,0));
+        world.support.add(new BlockPos(4,6,0));
+        world.solid.add(new BlockPos(-1,4,0));
+        world.solid.add(new BlockPos(1,4,0));
+        world.solid.add(new BlockPos(0,4,-1));
+        world.solid.add(new BlockPos(0,4,1));
+
+        GatePlan gate=new GatePlanner().find(world,new BlockPos(0,5,0),new BlockPos(4,6,0),4,8);
+        assertNotNull(gate);
+        BlockPos approach=new BlockPos(4,5,0);
+        assertTrue("an approach four blocks away with clear line-of-sight should be accepted",
+                gate.approaches.contains(approach));
+        assertEquals(new BlockPos(0,5,0),gate.approachToAperture.get(approach));
+        PathResult route=new Pathfinder().find(world,new BlockPos(4,6,0),gate.approaches,1000,8);
+        assertTrue("A* should find the safe approach point",route.found());
+    }
+
     @Test public void gatePlannerFindsGrateBelowApproximateMarker(){
         TestWorld world=new TestWorld();
         world.support.clear();
