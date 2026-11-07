@@ -446,6 +446,11 @@ public final class GeodeClient {
             failScaffold(p,mc.theWorld,"Player did not arrive at the scaffold base safely");
             return;
         }
+        int availableBlocks=countScaffoldBlocks(p);
+        if(availableBlocks<scaffoldPlan.getPlacementCount()){
+            failScaffold(p,mc.theWorld,"Need 7 solid blocks in the hotbar, but only found "+availableBlocks);
+            return;
+        }
         scaffoldOriginalSlot=p.inventory.currentItem;
         scaffoldOriginalPitch=p.rotationPitch;
         scaffoldStateSaved=true;
@@ -553,18 +558,30 @@ public final class GeodeClient {
         if(scaffoldTicks>60)failScaffold(p,w,"Scaffold jump timed out at "+target);
     }
 
+    private boolean isScaffoldBlock(ItemStack stack){
+        if(stack==null||stack.stackSize<=0||!(stack.getItem() instanceof ItemBlock))return false;
+        Block block=((ItemBlock)stack.getItem()).getBlock();
+        return block.getMaterial().isSolid()&&!(block instanceof BlockFalling);
+    }
+
+    private int countScaffoldBlocks(EntityPlayerSP p){
+        int count=0;
+        for(int slot=0;slot<9;slot++){
+            ItemStack stack=p.inventory.mainInventory[slot];
+            if(isScaffoldBlock(stack))count+=stack.stackSize;
+        }
+        return count;
+    }
+
     private ItemStack selectScaffoldBlock(EntityPlayerSP p){
         for(int slot=0;slot<9;slot++){
             ItemStack stack=p.inventory.mainInventory[slot];
-            if(stack==null||stack.stackSize<=0||!(stack.getItem() instanceof ItemBlock))continue;
-            Block block=((ItemBlock)stack.getItem()).getBlock();
-            if(block.getMaterial().isSolid()&&!(block instanceof BlockFalling)){
-                if(p.inventory.currentItem!=slot){
-                    p.inventory.currentItem=slot;
-                    mc.playerController.updateController();
-                }
-                return stack;
+            if(!isScaffoldBlock(stack))continue;
+            if(p.inventory.currentItem!=slot){
+                p.inventory.currentItem=slot;
+                mc.playerController.updateController();
             }
+            return stack;
         }
         return null;
     }
