@@ -181,6 +181,26 @@ public class PathfinderTest {
                 ChestScanRange.contains(167,175,47,75,150));
     }
 
+    @Test public void distantChestRoutesAreSplitInto56BlockSegments(){
+        BlockPos target=new BlockPos(197,69,75);
+        BlockPos first=ChestRoutePlanner.nextWaypoint(47.5D,75.5D,target,56,66);
+        assertNotNull(first);
+        double firstDistance=Math.sqrt(
+                (first.x+.5D-47.5D)*(first.x+.5D-47.5D)
+                +(first.z+.5D-75.5D)*(first.z+.5D-75.5D));
+        assertTrue(firstDistance<=56.0D);
+
+        BlockPos second=ChestRoutePlanner.nextWaypoint(first.x+.5D,first.z+.5D,target,56,66);
+        assertNotNull(second);
+        double secondDistance=Math.sqrt(
+                (second.x+.5D-first.x-.5D)*(second.x+.5D-first.x-.5D)
+                +(second.z+.5D-first.z-.5D)*(second.z+.5D-first.z-.5D));
+        assertTrue(secondDistance<=56.0D);
+
+        BlockPos finalLeg=ChestRoutePlanner.nextWaypoint(second.x+.5D,second.z+.5D,target,56,66);
+        assertNull("once within 56 blocks, use final chest approach candidates",finalLeg);
+    }
+
     @Test public void chestApproachPlannerSearchesMultipleSidesAndHeights(){
         BlockPos chest=new BlockPos(20,69,75);
         java.util.List<BlockPos> candidates=ChestApproachPlanner.candidates(chest,3,3);
