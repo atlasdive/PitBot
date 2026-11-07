@@ -193,7 +193,7 @@ public final class GeodeClient {
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
         List<BlockPos> goals=new ArrayList<BlockPos>();
         if("Sewer opening".equals(why)){
-            GatePlan plan=findGatePlan(snap,start);
+            GatePlan plan=new GatePlanner().find(snap,GATE,3,2,GeodeConfig.maxFallBlocks);
             if(plan==null){
                 gateColumns.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
                 goalCandidates=0;
@@ -304,62 +304,6 @@ public final class GeodeClient {
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Chest cleared; searching for next";
     }
-    private GatePlan findGatePlan(MinecraftPathWorld snap,BlockPos start){
-        int bestFrame=-1;
-        int bestPlaneDelta=Integer.MAX_VALUE;
-        int bestPlaneY=GATE.y;
-        List<BlockPos> landings=new ArrayList<BlockPos>();
-        Set<BlockPos> columns=new HashSet<BlockPos>();
-
-        // Search a few Y-levels around the supplied approximate coordinate. A valid
-        // aperture must be an open player-sized column with iron bars around its rim.
-        for(int plane=GATE.y-2;plane<=GATE.y+2;plane++){
-            for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
-                if(dx*dx+dz*dz>12)continue;
-                int x=GATE.x+dx,z=GATE.z+dz;
-                BlockPos aperture=new BlockPos(x,plane,z);
-                if(!snap.clear(aperture)||!snap.clear(aperture.add(0,1,0))
-                        ||!snap.clear(aperture.add(0,2,0)))continue;
-
-                int frame=0;
-                for(int ox=-1;ox<=1;ox++)for(int oz=-1;oz<=1;oz++){
-                    if(ox==0&&oz==0)continue;
-                    if(snap.ironBars(new BlockPos(x+ox,plane,z+oz)))frame++;
-                }
-                if(frame<2)continue;
-
-                BlockPos landing=null;
-                for(int y=plane-1;y>=plane-GeodeConfig.maxFallBlocks;y--){
-                    BlockPos candidate=new BlockPos(x,y,z);
-                    if(!snap.canStand(candidate)||!clearShaft(snap,x,z,y,plane))continue;
-                    landing=candidate;
-                    break;
-                }
-                if(landing==null)continue;
-
-                int planeDelta=Math.abs(plane-GATE.y);
-                if(frame>bestFrame||(frame==bestFrame&&planeDelta<bestPlaneDelta)){
-                    bestFrame=frame;bestPlaneDelta=planeDelta;bestPlaneY=plane;
-                    landings.clear();columns.clear();
-                }
-                if(frame==bestFrame&&planeDelta==bestPlaneDelta&&plane==bestPlaneY){
-                    landings.add(landing);
-                    columns.add(new BlockPos(x,plane,z));
-                }
-            }
-        }
-        if(landings.isEmpty())return null;
-        return new GatePlan(landings,columns,bestPlaneY);
-    }
-
-    private boolean clearShaft(PathWorld world,int x,int z,int landingY,int planeY){
-        for(int y=landingY;y<=planeY+1;y++){
-            BlockPos feet=new BlockPos(x,y,z);
-            if(!world.clear(feet)||!world.clear(feet.add(0,1,0)))return false;
-        }
-        return true;
-    }
-
     private GateDrop findGateDrop(List<PathStep> steps){
         for(int i=1;i<steps.size();i++){
             PathStep from=steps.get(i-1),to=steps.get(i);
@@ -392,14 +336,6 @@ public final class GeodeClient {
         gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;
     }
 
-    private static final class GatePlan{
-        final List<BlockPos> landings;
-        final Set<BlockPos> columns;
-        final int planeY;
-        GatePlan(List<BlockPos> landings,Set<BlockPos> columns,int planeY){
-            this.landings=landings;this.columns=columns;this.planeY=planeY;
-        }
-    }
     private static final class GateDrop{
         final BlockPos from,to;
         GateDrop(BlockPos from,BlockPos to){this.from=from;this.to=to;}
