@@ -35,9 +35,12 @@ public final class GeodeClient {
     private Stage stage=Stage.IDLE;
     private boolean running,launchDetected;
     private String status="Stopped",purpose="route";
-    private BlockPos chest,lastStart;
+    private BlockPos chest,lastStart,gateLanding,gateDropSource;
+    private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
+    private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,lootTicks,emptySlots,failedClicks,patrol,expandedNodes,goalCandidates;
-    private double launchY,launchX,launchZ;
+    private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
+    private boolean gateCrossed;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
 
     @SubscribeEvent public void onTick(TickEvent.ClientTickEvent e) {
@@ -51,6 +54,7 @@ public final class GeodeClient {
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
         collectResult(p);
+        if(stage==Stage.TO_GATE)trackGateCrossing(p);
         switch(stage){
             case TO_LAUNCH:case TO_GATE:case TO_CHEST:case PATROL:tickRoute(p,w);break;
             case WAIT_LAUNCH:
@@ -80,12 +84,14 @@ public final class GeodeClient {
         if(e.type!=RenderGameOverlayEvent.ElementType.ALL||mc.fontRendererObj==null)return;
         mc.fontRendererObj.drawStringWithShadow("Geode "+(running?"ON":"OFF")+" | "+stage,7,7,running?0x55FF55:0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(status,7,18,0xFFFFFF);
-        mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,29,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Expanded nodes: "+expandedNodes+" | Goals: "+goalCandidates,7,40,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Gap: "+(gateLanding==null?"detecting":gateLanding.x+","+gatePlaneY+","+gateLanding.z)
+                +" | crossed: "+gateCrossed,7,29,0x55FFFF);
+        mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,40,0x55FFFF);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,51,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,51,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,62,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,73,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -121,12 +127,12 @@ public final class GeodeClient {
             tell("This host is blocked. Add its exact hostname to config/geode.cfg.");return;
         }
         running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;emptyScans=0;patrol=0;
+        cooldown.clear();chest=null;emptyScans=0;patrol=0;resetGateState();
         tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
     }
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;movement.stop();
-        if(future!=null)future.cancel(true);future=null;chest=null;
+        if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
     }
     private void tickRoute(EntityPlayerSP p,World w){
         if(future!=null){movement.stop();return;}
@@ -140,8 +146,16 @@ public final class GeodeClient {
             launchX=p.posX;launchY=p.posY;launchZ=p.posZ;waitTicks=0;launchDetected=false;
             stage=Stage.WAIT_LAUNCH;status="At LaunchPad - waiting for launch and landing";
         }else if(stage==Stage.TO_GATE){
-            if(inSewer(p)){stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;tell("Sewer reached. Searching for existing chests.");findChest(p,w);}
-            else{retryTicks=ticks+10;status="Refining route to iron-bar gap";}
+            double feet=p.getEntityBoundingBox().minY;
+            if(gateCrossed&&p.onGround&&feet<gatePlaneY-0.25D){
+                stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+                tell("Iron-bar gap crossed. Sewer reached; searching for chests.");
+                findChest(p,w);
+            }else{
+                retryTicks=ticks+20;
+                status=gateCrossed?"Gap crossed; waiting for Sewer landing":"Reached route end without verified gap crossing; replanning";
+                gateDropSource=null;gateLanding=null;gateCrossed=false;previousGateFeet=Double.NaN;
+            }
         }else if(stage==Stage.TO_CHEST){stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;}
         else if(stage==Stage.PATROL){stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Patrol point reached - scanning again";}
     }
@@ -153,16 +167,15 @@ public final class GeodeClient {
     }
     private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
     private void routeGate(EntityPlayerSP p,World w){
-        // The gate coordinate marks the hole, not necessarily a standable block.
-        // Build candidate landing cells around the hole on the Sewer side of the grate.
-        List<BlockPos> goals=new ArrayList<BlockPos>();
+        // The marked coordinate is approximate. The planner scans a small area around it,
+        // detects a real iron-bar frame, and only accepts a clear shaft through that frame.
+        List<BlockPos> volume=new ArrayList<BlockPos>();
         for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
             if(dx*dx+dz*dz>12)continue;
-            for(int y=GATE.y-GeodeConfig.maxFallBlocks;y<GATE.y;y++){
-                goals.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
-            }
+            for(int y=GATE.y-GeodeConfig.maxFallBlocks;y<GATE.y;y++)
+                volume.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
         }
-        route(p,w,goals,"Sewer opening");
+        route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
         route(p,w,Arrays.asList(c.add(1,0,0),c.add(-1,0,0),c.add(0,0,1),c.add(0,0,-1),
@@ -179,7 +192,23 @@ public final class GeodeClient {
         lastStart=start;
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
         List<BlockPos> goals=new ArrayList<BlockPos>();
-        for(BlockPos g:rough)if(snap.canStand(g))goals.add(g);
+        if("Sewer opening".equals(why)){
+            GatePlan plan=findGatePlan(snap,start);
+            if(plan==null){
+                gateColumns.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
+                goalCandidates=0;
+                status="No iron-bar opening with a clear drop shaft near "+GATE+"; waiting for loaded chunks";
+                retryTicks=ticks+40;
+                return;
+            }
+            gatePlaneY=plan.planeY;
+            gateColumns.clear();gateColumns.addAll(plan.columns);
+            goals.addAll(plan.landings);
+            gateLanding=null;gateDropSource=null;gateCrossed=false;
+            previousGateFeet=Double.NaN;
+        }else{
+            for(BlockPos g:rough)if(snap.canStand(g))goals.add(g);
+        }
         if(goals.isEmpty()&&"LaunchPad".equals(why)){
             for(int x=LAUNCH.x-1;x<=LAUNCH.x+1;x++)for(int y=LAUNCH.y-1;y<=LAUNCH.y+2;y++)
                 for(int z=LAUNCH.z-1;z<=LAUNCH.z+1;z++){
@@ -206,8 +235,27 @@ public final class GeodeClient {
         try{
             PathResult r=f.get();
             expandedNodes=r.expanded;
-            if(r.found()){movement.setPath(r.steps,p);status=purpose+" path ready ("+r.steps.size()+" steps)";}
-            else{status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";retryTicks=ticks+40;}
+            if(r.found()){
+                if(stage==Stage.TO_GATE){
+                    GateDrop drop=findGateDrop(r.steps);
+                    if(drop==null){
+                        status="A* found a route, but it does not pass through the iron-bar opening; retrying";
+                        retryTicks=ticks+40;
+                        return;
+                    }
+                    gateDropSource=drop.from;
+                    gateLanding=drop.to;
+                    gateCrossed=false;
+                    previousGateFeet=p.getEntityBoundingBox().minY;
+                    status="Path to iron-bar gap ready: "+gateLanding+"; moving through opening";
+                }else{
+                    status=purpose+" path ready ("+r.steps.size()+" steps)";
+                }
+                movement.setPath(r.steps,p);
+            }else{
+                status="No path to "+purpose+" ("+r.expanded+" nodes, "+goalCandidates+" goals, start "+lastStart+")";
+                retryTicks=ticks+40;
+            }
         }catch(Exception ex){status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
     }
     private void findChest(EntityPlayerSP p,World w){
@@ -256,10 +304,112 @@ public final class GeodeClient {
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;status="Chest cleared; searching for next";
     }
-    private boolean inSewer(EntityPlayerSP p){
-        double dx=p.posX-GATE.x-.5D,dz=p.posZ-GATE.z-.5D;
-        return dx*dx+dz*dz<16D&&p.getEntityBoundingBox().minY<GATE.y-.2D&&p.onGround;
+    private GatePlan findGatePlan(MinecraftPathWorld snap,BlockPos start){
+        int bestFrame=-1;
+        int bestPlaneDelta=Integer.MAX_VALUE;
+        List<BlockPos> landings=new ArrayList<BlockPos>();
+        Set<BlockPos> columns=new HashSet<BlockPos>();
+
+        // Search a few Y-levels around the supplied approximate coordinate. A valid
+        // aperture must be an open player-sized column with iron bars around its rim.
+        for(int plane=GATE.y-2;plane<=GATE.y+2;plane++){
+            for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
+                if(dx*dx+dz*dz>12)continue;
+                int x=GATE.x+dx,z=GATE.z+dz;
+                BlockPos aperture=new BlockPos(x,plane,z);
+                if(!snap.clear(aperture)||!snap.clear(aperture.add(0,1,0))
+                        ||!snap.clear(aperture.add(0,2,0)))continue;
+
+                int frame=0;
+                for(int ox=-1;ox<=1;ox++)for(int oz=-1;oz<=1;oz++){
+                    if(ox==0&&oz==0)continue;
+                    if(snap.ironBars(new BlockPos(x+ox,plane,z+oz)))frame++;
+                }
+                if(frame<2)continue;
+
+                BlockPos landing=null;
+                for(int y=plane-1;y>=plane-GeodeConfig.maxFallBlocks;y--){
+                    BlockPos candidate=new BlockPos(x,y,z);
+                    if(!snap.canStand(candidate)||!clearShaft(snap,x,z,y,plane))continue;
+                    landing=candidate;
+                    break;
+                }
+                if(landing==null)continue;
+
+                int planeDelta=Math.abs(plane-GATE.y);
+                if(frame>bestFrame||(frame==bestFrame&&planeDelta<bestPlaneDelta)){
+                    bestFrame=frame;bestPlaneDelta=planeDelta;
+                    landings.clear();columns.clear();
+                }
+                if(frame==bestFrame&&planeDelta==bestPlaneDelta){
+                    landings.add(landing);
+                    columns.add(new BlockPos(x,plane,z));
+                }
+            }
+        }
+        if(landings.isEmpty())return null;
+        return new GatePlan(landings,columns,GATE.y+(bestPlaneDelta==Integer.MAX_VALUE?0:
+                nearestPlaneOffset(columns,GATE.y)));
     }
+
+    private int nearestPlaneOffset(Set<BlockPos> columns,int markerY){
+        if(columns.isEmpty())return 0;
+        return columns.iterator().next().y-markerY;
+    }
+
+    private boolean clearShaft(PathWorld world,int x,int z,int landingY,int planeY){
+        for(int y=landingY;y<=planeY+1;y++){
+            BlockPos feet=new BlockPos(x,y,z);
+            if(!world.clear(feet)||!world.clear(feet.add(0,1,0)))return false;
+        }
+        return true;
+    }
+
+    private GateDrop findGateDrop(List<PathStep> steps){
+        for(int i=1;i<steps.size();i++){
+            PathStep from=steps.get(i-1),to=steps.get(i);
+            if(to.kind==MovementKind.DROP&&from.pos.y>gatePlaneY&&to.pos.y<gatePlaneY
+                    &&gateColumns.contains(new BlockPos(to.pos.x,gatePlaneY,to.pos.z))){
+                return new GateDrop(from.pos,to.pos);
+            }
+        }
+        return null;
+    }
+
+    private void trackGateCrossing(EntityPlayerSP p){
+        if(gateLanding==null||gateDropSource==null)return;
+        double feet=p.getEntityBoundingBox().minY;
+        if(!Double.isNaN(previousGateFeet)){
+            double crossingY=gatePlaneY+0.5D;
+            boolean fallingThrough=previousGateFeet>crossingY&&feet<=crossingY;
+            boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.38D
+                    &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.38D;
+            if(fallingThrough&&centered){
+                gateCrossed=true;
+                status="Iron-bar opening crossed; confirming Sewer landing";
+            }
+        }
+        previousGateFeet=feet;
+    }
+
+    private void resetGateState(){
+        gateLanding=null;gateDropSource=null;gateColumns.clear();
+        gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;
+    }
+
+    private static final class GatePlan{
+        final List<BlockPos> landings;
+        final Set<BlockPos> columns;
+        final int planeY;
+        GatePlan(List<BlockPos> landings,Set<BlockPos> columns,int planeY){
+            this.landings=landings;this.columns=columns;this.planeY=planeY;
+        }
+    }
+    private static final class GateDrop{
+        final BlockPos from,to;
+        GateDrop(BlockPos from,BlockPos to){this.from=from;this.to=to;}
+    }
+
     private List<BlockPos> box(int ax,int bx,int ay,int by,int az,int bz){
         List<BlockPos> l=new ArrayList<BlockPos>();
         for(int x=ax;x<=bx;x++)for(int y=ay;y<=by;y++)for(int z=az;z<=bz;z++)l.add(new BlockPos(x,y,z));
