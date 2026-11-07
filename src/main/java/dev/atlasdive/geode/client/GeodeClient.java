@@ -187,7 +187,14 @@ public final class GeodeClient {
                 retryTicks=ticks+20;
                 status="Gate approach target missing; replanning";
             }
-        }else if(stage==Stage.TO_CHEST){stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;}
+        }else if(stage==Stage.TO_CHEST){
+            if(chest!=null&&p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>7.0D){
+                status="Reached chest transit waypoint; continuing toward "+chest;
+                routeChest(p,w,chest);
+            }else{
+                stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;
+            }
+        }
         else if(stage==Stage.PATROL){
             patrolLeg++;patrolFailures=0;patrolWaypoint=null;
             stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
@@ -214,8 +221,21 @@ public final class GeodeClient {
         route(p,w,volume,"Sewer opening");
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
-        // Search a three-block ring and multiple Y levels so distant/raised chests
-        // do not depend on one of only eight same-height adjacent blocks.
+        double dx=c.x+0.5D-p.posX,dz=c.z+0.5D-p.posZ;
+        double horizontal=Math.sqrt(dx*dx+dz*dz);
+        // Long routes are split into <=56-block A* segments. This keeps every
+        // collision snapshot within its bounded dimensions instead of clipping a
+        // distant target or allocating an enormous full-world volume.
+        if(horizontal>56.0D){
+            double t=56.0D/horizontal;
+            int wx=MathHelper.floor_double(p.posX+dx*t);
+            int wz=MathHelper.floor_double(p.posZ+dz*t);
+            int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
+            status="Routing toward distant chest via waypoint ("+wx+","+y+","+wz+")";
+            route(p,w,box(wx-3,wx+3,y-4,y+4,wz-3,wz+3),"chest "+c+" transit");
+            return;
+        }
+        // Search a three-block ring and multiple Y levels around the chest.
         route(p,w,ChestApproachPlanner.candidates(c,3,3),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
@@ -395,8 +415,7 @@ public final class GeodeClient {
                 excludedChestTiles++;
                 continue;
             }
-            if(Math.abs(pos.getX()-GATE.x)>GeodeConfig.scanRadius
-                    ||Math.abs(pos.getZ()-GATE.z)>GeodeConfig.scanRadius
+            if(!ChestScanRange.contains(pos.getX(),pos.getZ(),GATE.x,GATE.z,GeodeConfig.scanRadius)
                     ||pos.getY()<GATE.y-48||pos.getY()>GATE.y+16)continue;
             inRangeChestTiles++;
             BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
