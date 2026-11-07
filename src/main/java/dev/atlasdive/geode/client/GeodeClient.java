@@ -158,7 +158,7 @@ public final class GeodeClient {
         List<BlockPos> goals=new ArrayList<BlockPos>();
         for(int dx=-3;dx<=3;dx++)for(int dz=-3;dz<=3;dz++){
             if(dx*dx+dz*dz>12)continue;
-            for(int y=GATE.y-32;y<GATE.y;y++){
+            for(int y=GATE.y-GeodeConfig.maxFallBlocks;y<GATE.y;y++){
                 goals.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
             }
         }
