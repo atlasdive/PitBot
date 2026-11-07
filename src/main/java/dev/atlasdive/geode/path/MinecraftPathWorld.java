@@ -101,11 +101,11 @@ public final class MinecraftPathWorld implements PathWorld {
                 if(world.isBlockLoaded(below,false)&&world.isSideSolid(below,EnumFacing.UP,false))
                     standMask|=clearMask;
             }
-            clearMasks[i]=(byte)clearMask;standMasks[i]=(byte)standMask;
+            out.clearMasks[i]=(byte)clearMask;out.standMasks[i]=(byte)standMask;
             byte f=0;if(hazard)f|=HAZARD;if(climb)f|=CLIMB;if(liquid)f|=LIQUID;if(gateBarrier)f|=GATE_BARRIER;
-            flags[i]=f;
+            out.flags[i]=f;
             float c=0F;if(b==Blocks.water||b==Blocks.flowing_water)c+=1.0F;
-            if(b==Blocks.web)c+=8F;if(b==Blocks.soul_sand)c+=1F;costs[i]=c;
+            if(b==Blocks.web)c+=8F;if(b==Blocks.soul_sand)c+=1F;out.costs[i]=c;
         }
         return out;
     }
