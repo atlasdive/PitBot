@@ -27,6 +27,18 @@ dependencies {
     testCompile 'junit:junit:4.13.2'
 }
 
+test {
+    useJUnit()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat 'full'
+    }
+    reports {
+        junitXml.enabled = true
+        html.enabled = true
+    }
+}
+
 processResources {
     inputs.property 'version', project.version
     inputs.property 'mcversion', '1.8.9'
