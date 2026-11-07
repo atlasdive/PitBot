@@ -14,7 +14,7 @@ Press **G** to start or stop Geode.
 1. Prioritize the LaunchPad column at `(16, 95, 16)`; only use nearby safe cells if the exact column cannot be occupied.
 2. Wait for the LaunchPad to launch the player downward. Geode waits for the player to land before planning the next route.
 3. Scan within the configurable gate radius (default 12 blocks) around `(47, 66, 75)` for an opening in a framed floor/railing structure. Detection recognizes iron bars, panes, fences, walls, and opaque solid frame blocks rather than relying on one exact block ID.
-4. Find supported standing cells beside each opening. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
+4. Find supported standing cells within four horizontal blocks of each opening, provided there is a clear player-width approach corridor. A* pathfinds to one of those approach cells; it does not require a supported landing directly beneath the hole.
 5. From the approach cell, steer into the opening and monitor the player's feet crossing the grate plane downward.
 6. Only after the crossing is verified and the player lands below the grate does Geode scan loaded tile entities for existing chests.
 7. Pathfind to a standing position beside a chest, open it, shift-click its contents into the player's inventory, then continue scanning.
@@ -25,7 +25,7 @@ The chat message `SEWER! A new treasure spawned somewhere!` is only an optional 
 ## Pathfinding
 
 - 3D A* with multiple goal positions.
-- Collision snapshot is captured on the client thread; A* runs on a background worker.
+- Collision snapshot is captured on the client thread with a 24-block horizontal margin around the target region; A* runs on a background worker.
 - Diagonal corner checks, one-block step-ups, jump arcs, long drops, ladders, and liquid movement.
 - Drop movement has **zero extra fall-risk cost**, including straight-down drops through openings. Void/unlandable cells and lava, fire, and cactus are still rejected.
 - A stuck movement controller requests a new path.
