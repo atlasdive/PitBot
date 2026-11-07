@@ -6,14 +6,14 @@ public final class PatrolPlanner {
 
     /**
      * Returns the waypoint for a zero-based patrol leg.
-     * Leg lengths grow every two turns: 8, 8, 12, 12, 16, 16, ...
+     * Leg lengths grow every two turns: 8, 8, 16, 16, 24, 24, ...
      */
     public static BlockPos waypoint(BlockPos origin,int leg,int y) {
         if(origin==null)throw new IllegalArgumentException("origin cannot be null");
         if(leg<0)throw new IllegalArgumentException("leg must be non-negative");
         int x=origin.x,z=origin.z;
         for(int i=0;i<=leg;i++){
-            int distance=8+(i/2)*4;
+            int distance=8+(i/2)*8;
             switch(i&3){
                 case 0: z-=distance; break; // north
                 case 1: x+=distance; break; // east
