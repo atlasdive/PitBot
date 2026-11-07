@@ -30,6 +30,19 @@ public class PathfinderTest {
         assertTrue("drop cost should only be horizontal distance",result.steps.get(1).cost<1.1D);
     }
 
+    @Test public void supportsStraightDownDropThroughOneBlockOpening(){
+        TestWorld world=new TestWorld();
+        world.support.clear();
+        world.support.add(new BlockPos(0,5,0));
+        world.support.add(new BlockPos(0,0,0));
+        PathResult result=new Pathfinder().find(world,new BlockPos(0,5,0),
+                java.util.Collections.singletonList(new BlockPos(0,0,0)),1000,8);
+        assertTrue(result.found());
+        assertEquals(2,result.steps.size());
+        assertEquals(MovementKind.DROP,result.steps.get(1).kind);
+        assertEquals(0.0D,result.steps.get(1).cost,0.0001D);
+    }
+
     private static final class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         TestWorld(){for(int x=-2;x<=10;x++)for(int z=-2;z<=10;z++)support.add(new BlockPos(x,1,z));}
