@@ -6,7 +6,7 @@ public interface PathWorld {
     boolean hazard(BlockPos pos);
     boolean climbable(BlockPos pos);
     boolean liquid(BlockPos pos);
-    boolean ironBars(BlockPos pos);
+    boolean gateBarrier(BlockPos pos);
     double extraCost(BlockPos pos);
     boolean jumpArcClear(BlockPos from, BlockPos to);
     boolean lineClear(BlockPos from, BlockPos to);
