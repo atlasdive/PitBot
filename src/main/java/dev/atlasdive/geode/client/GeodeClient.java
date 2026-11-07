@@ -34,7 +34,7 @@ public final class GeodeClient {
     private Future<PathResult> future;
     private Stage stage=Stage.IDLE;
     private boolean running,launchDetected;
-    private String status="Stopped",purpose="route";
+    private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource;
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private int gatePlaneY=GATE.y;
@@ -86,12 +86,13 @@ public final class GeodeClient {
         mc.fontRendererObj.drawStringWithShadow(status,7,18,0xFFFFFF);
         mc.fontRendererObj.drawStringWithShadow("Gap: "+(gateLanding==null?"detecting":gateLanding.x+","+gatePlaneY+","+gateLanding.z)
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,40,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,51,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,62,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,62,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,73,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,73,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,84,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -193,17 +194,23 @@ public final class GeodeClient {
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,start,rough);
         List<BlockPos> goals=new ArrayList<BlockPos>();
         if("Sewer opening".equals(why)){
-            GatePlan plan=new GatePlanner().find(snap,GATE,3,2,GeodeConfig.maxFallBlocks);
+            GatePlanner planner=new GatePlanner();
+            GatePlan plan=planner.find(snap,GATE,start,4,GeodeConfig.maxFallBlocks);
+            gateDiagnostics="Y "+planner.minPlaneY()+".."+planner.maxPlaneY()
+                    +" | clear "+planner.clearColumns()
+                    +" | bars "+planner.framedColumns()
+                    +" | landing "+planner.safeLandingColumns();
             if(plan==null){
                 gateColumns.clear();gateLanding=null;gateDropSource=null;gateCrossed=false;
                 goalCandidates=0;
-                status="No iron-bar opening with a clear drop shaft near "+GATE+"; waiting for loaded chunks";
+                status="No usable iron-bar gap near "+GATE+"; scan results shown below";
                 retryTicks=ticks+40;
                 return;
             }
             gatePlaneY=plan.planeY;
             gateColumns.clear();gateColumns.addAll(plan.columns);
             goals.addAll(plan.landings);
+            goalCandidates=goals.size();
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
         }else{
@@ -307,7 +314,7 @@ public final class GeodeClient {
     private GateDrop findGateDrop(List<PathStep> steps){
         for(int i=1;i<steps.size();i++){
             PathStep from=steps.get(i-1),to=steps.get(i);
-            if(to.kind==MovementKind.DROP&&from.pos.y>gatePlaneY&&to.pos.y<gatePlaneY
+            if(to.kind==MovementKind.DROP&&from.pos.y>=gatePlaneY&&to.pos.y<gatePlaneY
                     &&gateColumns.contains(new BlockPos(to.pos.x,gatePlaneY,to.pos.z))){
                 return new GateDrop(from.pos,to.pos);
             }
