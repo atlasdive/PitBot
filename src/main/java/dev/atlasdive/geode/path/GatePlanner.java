@@ -8,11 +8,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Finds an open hole in an iron-bar floor and safe standing cells adjacent to it.
+ * Finds an opening in a framed floor/railing structure and supported approach cells.
  *
- * Detection does NOT require a solid landing directly beneath the hole. The player
- * pathfinds to a supported approach cell, steps into the opening, and the runtime
- * controller confirms the downward crossing. The Sewer floor can be elsewhere.
+ * Gate geometry is not tied to Blocks.iron_bars: remakes may render the barrier with
+ * panes, fences, walls, or solid blocks. The candidate must be a clear player-sized
+ * shaft in an otherwise framed layer, with a supported approach next to the opening.
  */
 public final class GatePlanner {
     private int scannedColumns,clearColumns,framedColumns,approachColumns,minPlaneY,maxPlaneY;
@@ -25,8 +25,6 @@ public final class GatePlanner {
         maxPlaneY=Math.min(marker.y+2,start.y);
         if(maxPlaneY<minPlaneY)return null;
 
-        // Scan from the player's current level downward. Prefer the first usable
-        // grate layer encountered, rather than a deeper opening below it.
         for(int plane=maxPlaneY;plane>=minPlaneY;plane--){
             int bestFrameScore=-1;
             List<BlockPos> approaches=new ArrayList<BlockPos>();
@@ -39,17 +37,17 @@ public final class GatePlanner {
                 int x=marker.x+dx,z=marker.z+dz;
                 BlockPos aperture=new BlockPos(x,plane,z);
 
-                // The player's 1.8-block body must fit through the hole and begin
-                // descending into the block layer below the iron-bar floor.
+                // A player must fit through the empty cell in the floor and retain
+                // head clearance while the feet pass below the barrier plane.
                 if(!world.clear(aperture.add(0,-1,0))
                         ||!world.clear(aperture)
                         ||!world.clear(aperture.add(0,1,0)))continue;
                 clearColumns++;
 
-                int frameScore=countNearbyIronBars(world,x,z,plane);
-                // Require a frame on at least three cardinal sides. This prevents
-                // nearby bars from making an unrelated diagonal air cell look like a hole.
-                if(frameScore<300)continue;
+                int frameScore=countNearbyBarriers(world,x,z,plane);
+                // Require a frame on at least two cardinal sides. This allows a
+                // corridor-like opening between two rails instead of demanding 3 sides.
+                if(frameScore<200)continue;
                 framedColumns++;
 
                 List<BlockPos> localApproaches=new ArrayList<BlockPos>();
@@ -79,28 +77,29 @@ public final class GatePlanner {
                     columns.add(aperture);
                 }
             }
-
-            if(!approaches.isEmpty()){
-                return new GatePlan(plane,approaches,approachMap,columns);
-            }
+            if(!approaches.isEmpty())return new GatePlan(plane,approaches,approachMap,columns);
         }
         return null;
     }
 
-    private int countNearbyIronBars(PathWorld world,int x,int z,int plane){
-        int sides=0,total=0;
+    private int countNearbyBarriers(PathWorld world,int x,int z,int plane){
+        int sides=0,floorFrame=0,otherFrame=0;
         for(int[] d:APPROACH_DIRS){
             boolean found=false;
-            for(int dy=-1;dy<=1;dy++){
-                if(world.ironBars(new BlockPos(x+d[0],plane+dy,z+d[1]))){
+            if(world.gateBarrier(new BlockPos(x+d[0],plane-1,z+d[1]))){
+                floorFrame++;
+                found=true;
+            }
+            for(int dy=0;dy<=1&&!found;dy++){
+                if(world.gateBarrier(new BlockPos(x+d[0],plane+dy,z+d[1]))){
+                    otherFrame++;
                     found=true;
-                    total++;
                 }
             }
             if(found)sides++;
         }
-        // Hundreds encode the number of framed sides; the remainder ranks denser frames.
-        return sides*100+total;
+        // Two opposed floor supports should score higher than incidental overhead walls.
+        return sides*100+floorFrame*10+otherFrame;
     }
 
     private static final int[][] APPROACH_DIRS={{1,0},{-1,0},{0,1},{0,-1}};
