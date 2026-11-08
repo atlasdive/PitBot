@@ -55,7 +55,7 @@ public final class GeodeClient {
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
     private BlockPos activeChestRouteTarget;
-    private int chestTransitRange=24;
+    private int chestTransitRange=24,chestApproachRadius=3;
     private final ChestLootTimer lootTimer=new ChestLootTimer();
     private ChestScaffoldPlan scaffoldPlan;
     private BlockPos scaffoldedChest;
@@ -651,10 +651,7 @@ public final class GeodeClient {
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.endsWith("transit")){
                 retryChestTransit(p,w,"Chest transit stalled");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
-                cooldown.put(chest,w.getTotalWorldTime()+100L);
-                status="Final chest approach stalled; skipping this route and scanning again";
-                chest=null;activeChestRouteTarget=null;stage=Stage.SEEK;
-                scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
+                retryChestApproach(p,w,"Final chest approach stalled");
             }else{
                 retryTicks=ticks+5;status="Blocked - recalculating path";
             }
@@ -811,6 +808,7 @@ public final class GeodeClient {
         if(!c.equals(activeChestRouteTarget)){
             activeChestRouteTarget=c;
             chestTransitRange=24;
+            chestApproachRadius=3;
         }
         ChestScaffoldPlan plan=ChestScaffoldPlan.forChest(c);
         if(plan!=null&&!c.equals(scaffoldedChest)&&!failedScaffoldChests.contains(c)){
@@ -855,6 +853,23 @@ public final class GeodeClient {
         route(p,w,Collections.singletonList(scaffoldPlan.getStagingFeet()),"chest scaffold staging");
     }
 
+    /** Retry a blocked final chest approach with a wider, still interactable goal ring. */
+    private void retryChestApproach(EntityPlayerSP p,World w,String reason){
+        if(chest==null||w==null){stage=Stage.SEEK;retryTicks=ticks+5;return;}
+        if(chestApproachRadius<4){
+            chestApproachRadius=4;
+            movement.stop();
+            status=reason+"; widening final approach search to 4 blocks";
+            retryTicks=ticks+2;
+            routeChestDirect(p,w,chest);
+            return;
+        }
+        cooldown.put(chest,w.getTotalWorldTime()+200L);
+        status=reason+"; no reachable approach within 4 blocks, skipping "+chest;
+        chest=null;activeChestRouteTarget=null;stage=Stage.SEEK;
+        scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
+    }
+
     private void routeChestDirect(EntityPlayerSP p,World w,BlockPos c){
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
         BlockPos waypoint=ChestRoutePlanner.nextWaypoint(p.posX,p.posZ,c,chestTransitRange,y);
@@ -875,8 +890,7 @@ public final class GeodeClient {
                     "special chest "+c+" precision approach",approachGoals);
             return;
         }
-        int approachRadius=c.equals(scaffoldedChest)?4:3;
-        route(p,w,ChestApproachPlanner.candidates(c,approachRadius,3),"chest "+c);
+        route(p,w,ChestApproachPlanner.candidates(c,chestApproachRadius,4),"chest "+c);
     }
     private void routePatrol(EntityPlayerSP p,World w){
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
@@ -1047,6 +1061,16 @@ public final class GeodeClient {
                         }
                     }
                 }
+                if(progressTarget==null&&chest!=null&&why.equals("chest "+chest)){
+                    double maxReachSquared=25.0D;
+                    for(int i=pathGoals.size()-1;i>=before;i--){
+                        PathNode candidate=pathGoals.get(i);
+                        double dx=candidate.worldX()-(chest.x+0.5D);
+                        double dy=candidate.feetY()-(chest.y+0.5D);
+                        double dz=candidate.worldZ()-(chest.z+0.5D);
+                        if(dx*dx+dy*dy+dz*dz>maxReachSquared)pathGoals.remove(i);
+                    }
+                }
                 if(pathGoals.size()>before)goals.add(g);
             }
         }
@@ -1083,11 +1107,8 @@ public final class GeodeClient {
                 return;
             }else if("chest scaffold staging".equals(why)&&chest!=null){
                 failScaffold(p,w,"Scaffold staging position is not reachable");
-            }else if(why.startsWith("chest ")&&chest!=null){
-                cooldown.put(chest,w.getTotalWorldTime()+200L);
-                status="No safe approach cells for "+chest+"; skipping this chest";
-                chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
-                retryTicks=ticks+5;
+            }else if(progressTarget==null&&why.startsWith("chest ")&&chest!=null){
+                retryChestApproach(p,w,"No safe approach cells for "+chest);
             }else{
                 status="No standable goal cells for "+why+" near "+(rough.isEmpty()?"target":rough.get(0));
                 retryTicks=ticks+40;
@@ -1166,10 +1187,7 @@ public final class GeodeClient {
                     &&chestTransitRange>12){
                 retryChestTransit(p,mc.theWorld,"No path for chest transit segment");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
-                cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
-                status="No route to chest "+chest+" ("+r.expanded+" nodes); trying another chest";
-                chest=null;activeChestRouteTarget=null;stage=Stage.SEEK;
-                scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
+                retryChestApproach(p,mc.theWorld,"No route to chest "+chest+" ("+r.expanded+" nodes)");
             }else if(stage==Stage.WATER_RECOVERY){
                 waterRecoveryRadius=Math.min(16,waterRecoveryRadius+4);
                 status="No dry escape path yet; expanding to radius "+waterRecoveryRadius;
