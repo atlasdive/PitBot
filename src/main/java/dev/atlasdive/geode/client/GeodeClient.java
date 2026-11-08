@@ -1042,16 +1042,12 @@ public final class GeodeClient {
         }
         if(usingSewerSnapshot)snap=sewerSnapshot;
         else snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
-        PathNode resolvedStart=requestedStart;
-        if(!snap.canStand(resolvedStart)){
-            double nearest=Double.POSITIVE_INFINITY;
-            for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
-                PathNode candidate=new PathNode(requestedStart.x,requestedStart.y2,requestedStart.z,lane);
-                if(!snap.canStand(candidate))continue;
-                double dx=candidate.worldX()-p.posX,dz=candidate.worldZ()-p.posZ;
-                double distance=dx*dx+dz*dz;
-                if(distance<nearest){nearest=distance;resolvedStart=candidate;}
-            }
+        PathNode resolvedStart=PathStartResolver.resolve(
+                snap,p.posX,p.getEntityBoundingBox().minY,p.posZ);
+        if(resolvedStart==null){
+            status="No safe path start within 2 blocks of "+start+"; waiting for a clear standing position";
+            retryTicks=ticks+20;
+            return;
         }
         final PathNode pathStart=resolvedStart;
         List<BlockPos> goals=new ArrayList<BlockPos>();

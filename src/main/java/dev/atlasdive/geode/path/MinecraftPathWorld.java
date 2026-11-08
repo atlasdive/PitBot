@@ -4,8 +4,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockLadder;
 import net.minecraft.block.BlockVine;
 import net.minecraft.block.BlockPane;
-import net.minecraft.block.BlockSlab;
-import net.minecraft.block.BlockStairs;
 import net.minecraft.block.BlockFence;
 import net.minecraft.block.BlockWall;
 import net.minecraft.block.material.Material;
@@ -65,8 +63,14 @@ public final class MinecraftPathWorld implements PathWorld {
             int z1=Math.min(az+d-1,(int)Math.ceil(box.maxZ+0.65D));
             int y0=Math.max(minY2,(int)Math.floor((box.minY-1.80D)*2.0D)+1);
             int y1=Math.min(maxY2,(int)Math.ceil(box.maxY*2.0D)-1);
+            boolean thinFloor=isThinFloor(box);
+            int thinFloorY2=thinFloor?(int)Math.round(Math.floor(box.minY)*2.0D):Integer.MIN_VALUE;
             for(int x=x0;x<=x1;x++)for(int z=z0;z<=z1;z++){
                 for(int y2=y0;y2<=y1;y2++){
+                    // A carpet (and other 1/8-block-or-thinner floor plates) has a
+                    // top between the half-block grid levels. Treat its base Y as the
+                    // standing node rather than marking that node as intersecting it.
+                    if(thinFloor&&y2==thinFloorY2)continue;
                     double feetY=y2*0.5D;int i=out.index(x,y2,z),mask=blocked[i]&0xFF;
                     for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
                         double cx=x+0.5D+OFFSET_X[lane],cz=z+0.5D+OFFSET_Z[lane];
@@ -77,10 +81,12 @@ public final class MinecraftPathWorld implements PathWorld {
                     blocked[i]=(byte)mask;
                 }
             }
-            int feetY2=(int)Math.round(box.maxY*2.0D);
-            if(Math.abs(box.maxY-feetY2*0.5D)<0.035D&&feetY2>=minY2&&feetY2<=maxY2){
+            int topY2=(int)Math.round(box.maxY*2.0D);
+            boolean halfGridTop=Math.abs(box.maxY-topY2*0.5D)<0.035D;
+            int supportY2=halfGridTop?topY2:thinFloor?thinFloorY2:Integer.MIN_VALUE;
+            if(supportY2>=minY2&&supportY2<=maxY2){
                 for(int x=x0;x<=x1;x++)for(int z=z0;z<=z1;z++){
-                    int i=out.index(x,feetY2,z),mask=supported[i]&0xFF;
+                    int i=out.index(x,supportY2,z),mask=supported[i]&0xFF;
                     for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
                         double cx=x+0.5D+OFFSET_X[lane],cz=z+0.5D+OFFSET_Z[lane];
                         double overlapX=Math.min(box.maxX,cx+0.30D)-Math.max(box.minX,cx-0.30D);
@@ -100,16 +106,6 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean hazard=m==Material.lava||b==Blocks.lava||b==Blocks.flowing_lava
                     ||b==Blocks.fire||b==Blocks.cactus;
             boolean climb=b instanceof BlockLadder||b instanceof BlockVine;
-            // The player's feet cell can be the stair/slab block itself or the air cell
-            // immediately above it, depending on the top surface elevation.
-            boolean centerOnly=b instanceof BlockSlab||b instanceof BlockStairs;
-            if(!centerOnly){
-                net.minecraft.util.BlockPos supportPos=p.down();
-                if(world.isBlockLoaded(supportPos,false)){
-                    Block support=world.getBlockState(supportPos).getBlock();
-                    centerOnly=support instanceof BlockSlab||support instanceof BlockStairs;
-                }
-            }
             boolean gateBarrier=b==Blocks.iron_bars||b instanceof BlockPane||b instanceof BlockFence
                     ||b instanceof BlockWall||b.isOpaqueCube();
             int i=out.index(x,y2,z);
@@ -120,6 +116,11 @@ public final class MinecraftPathWorld implements PathWorld {
                 if(world.isBlockLoaded(below,false)&&world.isSideSolid(below,EnumFacing.UP,false))
                     standMask|=clearMask;
             }
+            // Restrict movement to the centre only when collision sampling proves
+            // that the centre is the sole supported lane. Stairs/slabs can have safe
+            // edge lanes depending on their orientation and the player's position.
+            boolean centerOnly=(standMask&(1<<PathNode.CENTER))!=0
+                    &&(standMask&~(1<<PathNode.CENTER))==0;
             out.clearMasks[i]=(byte)clearMask;out.standMasks[i]=(byte)standMask;
             if(b instanceof BlockVine){
                 out.vineMasks[i]=(byte)VineTraversal.laneMask(
@@ -134,6 +135,13 @@ public final class MinecraftPathWorld implements PathWorld {
         }
         out.captureLoadedChunkMask(world);
         return out;
+    }
+
+    /** A carpet-like collision plate whose top sits between half-block node levels. */
+    private static boolean isThinFloor(AxisAlignedBB box){
+        double height=box.maxY-box.minY;
+        return height>1.0E-4D&&height<=0.1251D
+                &&Math.abs(box.minY-Math.floor(box.minY))<1.0E-4D;
     }
 
     /**
