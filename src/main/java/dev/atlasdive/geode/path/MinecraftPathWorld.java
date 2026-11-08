@@ -24,11 +24,17 @@ public final class MinecraftPathWorld implements PathWorld {
     private static final double[] OFFSET_X={0.0D,-0.35D,0.35D,0.0D,0.0D};
     private static final double[] OFFSET_Z={0.0D,0.0D,0.0D,-0.35D,0.35D};
     private final int minX,minY,minZ,w,h,d,halfH;
+    private final int minChunkX,minChunkZ,chunkWidth,chunkDepth;
+    private final boolean[] loadedChunkMask;
     private final byte[] flags,clearMasks,standMasks,vineMasks;
     private final float[] costs;
 
     private MinecraftPathWorld(int x,int y,int z,int w,int h,int d){
         minX=x;minY=y;minZ=z;this.w=w;this.h=h;this.d=d;halfH=h*2+1;
+        minChunkX=x>>4;minChunkZ=z>>4;
+        chunkWidth=((x+w-1)>>4)-minChunkX+1;
+        chunkDepth=((z+d-1)>>4)-minChunkZ+1;
+        loadedChunkMask=new boolean[chunkWidth*chunkDepth];
         int count=w*halfH*d;
         flags=new byte[count];clearMasks=new byte[count];standMasks=new byte[count];vineMasks=new byte[count];costs=new float[count];
     }
@@ -126,8 +132,37 @@ public final class MinecraftPathWorld implements PathWorld {
             float c=0F;if(b==Blocks.water||b==Blocks.flowing_water)c+=1.0F;
             if(b==Blocks.web)c+=8F;if(b==Blocks.soul_sand)c+=1F;out.costs[i]=c;
         }
+        out.captureLoadedChunkMask(world);
         return out;
     }
+
+    /**
+     * Records the loaded/unloaded state of every chunk intersecting this snapshot.
+     * A full-map snapshot contains no collision data for chunks that were unloaded
+     * during capture, so it must not be reused after those chunks load (or unload).
+     */
+    private void captureLoadedChunkMask(World world){
+        for(int cx=0;cx<chunkWidth;cx++)for(int cz=0;cz<chunkDepth;cz++){
+            net.minecraft.util.BlockPos probe=new net.minecraft.util.BlockPos(
+                    (minChunkX+cx)<<4,minY,(minChunkZ+cz)<<4);
+            loadedChunkMask[cx*chunkDepth+cz]=world.isBlockLoaded(probe,false);
+        }
+    }
+
+    /**
+     * True only while the chunk availability inside this snapshot is unchanged.
+     * Callers should recapture a local snapshot when this returns false.
+     */
+    public boolean matchesLoadedChunks(World world){
+        if(world==null)return false;
+        for(int cx=0;cx<chunkWidth;cx++)for(int cz=0;cz<chunkDepth;cz++){
+            net.minecraft.util.BlockPos probe=new net.minecraft.util.BlockPos(
+                    (minChunkX+cx)<<4,minY,(minChunkZ+cz)<<4);
+            if(world.isBlockLoaded(probe,false)!=loadedChunkMask[cx*chunkDepth+cz])return false;
+        }
+        return true;
+    }
+
     private static List<PathNode> toNodes(List<BlockPos> goals){
         List<PathNode> nodes=new ArrayList<PathNode>(goals.size());
         for(BlockPos goal:goals)nodes.add(PathNode.fromBlockPos(goal));

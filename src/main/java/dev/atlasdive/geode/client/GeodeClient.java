@@ -654,8 +654,12 @@ public final class GeodeClient {
         if(exactGoals!=null)captureGoals.addAll(exactGoals);
         else for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
         MinecraftPathWorld snap=null;
+        // The Sewer-wide snapshot is immutable. Reuse it only while every chunk
+        // in its bounds has the same loaded state as at capture time. Otherwise its
+        // previously-unloaded cells would look like permanent walls even after the
+        // client loads those chunks, so build a fresh local snapshot for this route.
         boolean usingSewerSnapshot=inSewer&&sewerSnapshot!=null&&sewerSnapshotWorld==w
-                &&sewerSnapshot.contains(requestedStart);
+                &&sewerSnapshot.matchesLoadedChunks(w)&&sewerSnapshot.contains(requestedStart);
         if(usingSewerSnapshot){
             for(PathNode goal:captureGoals)if(!sewerSnapshot.contains(goal)){usingSewerSnapshot=false;break;}
         }
