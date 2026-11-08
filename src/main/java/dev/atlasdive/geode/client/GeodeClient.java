@@ -36,6 +36,7 @@ public final class GeodeClient {
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
     private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
+    private static final BlockPos AIMED_CHEST=new BlockPos(99,61,46);
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
