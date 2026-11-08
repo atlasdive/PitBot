@@ -1124,14 +1124,15 @@ public final class GeodeClient {
 
         if(isContainerGuiOpen(p)){
             int activeId=currentContainerWindowId(p);
-            if(activeId>0&&activeId!=closeWindowId){
+            if(activeId>0&&(activeId!=closeWindowId||closeAttempts==0)){
+                closeWindowId=activeId;
                 closeActiveContainer(p);
                 closeAttempts++;
                 retryTicks=ticks+4;
-                status="Closed newly opened chest window "+activeId+" (single request)";
+                status="Closed chest window "+activeId+" (one request only)";
             }else{
-                // A window id already received its one close request. Do not send it again.
-                status="Waiting for chest container to close; no duplicate packet sent";
+                // The request was already sent for this window. Never replay a stale C0D.
+                status="Waiting for chest container to close; duplicate request suppressed";
                 retryTicks=ticks+10;
             }
             return;
