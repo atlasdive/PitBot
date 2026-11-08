@@ -1621,10 +1621,18 @@ public final class GeodeClient {
                 {0.25D,0.86D,0.25D},{0.50D,0.86D,0.50D},{0.75D,0.86D,0.75D}
         };
         ChestAimTarget found=null;
+        ChestAimTarget nearestFaceFallback=null;
+        double nearestDistance=Double.POSITIVE_INFINITY;
         for(double[] sample:samples){
             double tx=bp.getX()+sample[0],ty=bp.getY()+sample[1],tz=bp.getZ()+sample[2];
             float yaw=ChestAimMath.yaw(p.posX,p.posZ,tx,tz);
             float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz);
+            double ddx=tx-p.posX,ddy=ty-(p.posY+p.getEyeHeight()),ddz=tz-p.posZ;
+            double distance=ddx*ddx+ddy*ddy+ddz*ddz;
+            if(distance<nearestDistance){
+                nearestDistance=distance;
+                nearestFaceFallback=new ChestAimTarget(yaw,pitch);
+            }
             p.rotationYaw=yaw;p.rotationPitch=pitch;
             if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
                 found=new ChestAimTarget(yaw,pitch);
@@ -1632,8 +1640,10 @@ public final class GeodeClient {
             }
         }
         p.rotationYaw=savedYaw;p.rotationPitch=savedPitch;
-        // Never aim at a face through a wall. A null result triggers a new approach.
-        return found;
+        // Keep aiming at the nearest face even while blocked. The right-click path
+        // independently requires an exact chest ray hit, so this fallback cannot
+        // interact through a wall; the blocked-side timeout will request a new route.
+        return found!=null?found:nearestFaceFallback;
     }
 
     private boolean invokeVanillaRightClick(MovingObjectPosition hit){
