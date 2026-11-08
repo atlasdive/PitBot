@@ -60,6 +60,7 @@ public final class GeodeClient {
     private ChestScaffoldPlan scaffoldPlan;
     private BlockPos scaffoldedChest;
     private final Set<BlockPos> failedScaffoldChests=new HashSet<BlockPos>();
+    private final Set<BlockPos> failedChestApproaches=new HashSet<BlockPos>();
     private int scaffoldIndex,scaffoldTicks,scaffoldAttempts,scaffoldOriginalSlot=-1;
     private float scaffoldOriginalPitch;
     private boolean scaffoldStateSaved,scaffoldJumpIssued,scaffoldJumpKeyHeld,scaffoldAirborneSeen,scaffoldPlaceRequested,scaffoldPlaced;
@@ -651,6 +652,7 @@ public final class GeodeClient {
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.endsWith("transit")){
                 retryChestTransit(p,w,"Chest transit stalled");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
+                failedChestApproaches.add(playerPos(p));
                 retryChestApproach(p,w,"Final chest approach stalled");
             }else{
                 retryTicks=ticks+5;status="Blocked - recalculating path";
@@ -809,6 +811,7 @@ public final class GeodeClient {
             activeChestRouteTarget=c;
             chestTransitRange=24;
             chestApproachRadius=3;
+            failedChestApproaches.clear();
         }
         ChestScaffoldPlan plan=ChestScaffoldPlan.forChest(c);
         if(plan!=null&&!c.equals(scaffoldedChest)&&!failedScaffoldChests.contains(c)){
@@ -864,10 +867,15 @@ public final class GeodeClient {
             routeChestDirect(p,w,chest);
             return;
         }
-        cooldown.put(chest,w.getTotalWorldTime()+200L);
-        status=reason+"; no reachable approach within 4 blocks, skipping "+chest;
-        chest=null;activeChestRouteTarget=null;stage=Stage.SEEK;
-        scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
+        skipBlockedChest(w,reason+"; no reachable line-of-sight approach within 4 blocks");
+
+    }
+
+    private void skipBlockedChest(World w,String reason){
+        if(chest!=null&&w!=null)cooldown.put(chest,w.getTotalWorldTime()+1200L);
+        status=reason+"; skipping chest temporarily";
+        chest=null;activeChestRouteTarget=null;failedChestApproaches.clear();
+        stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
     }
 
     private void routeChestDirect(EntityPlayerSP p,World w,BlockPos c){
@@ -890,8 +898,56 @@ public final class GeodeClient {
                     "special chest "+c+" precision approach",approachGoals);
             return;
         }
-        route(p,w,ChestApproachPlanner.candidates(c,chestApproachRadius,4),"chest "+c);
+        List<PathNode> visibleGoals=visibleChestApproachGoals(p,w,c,chestApproachRadius);
+        if(visibleGoals.isEmpty()){
+            retryChestApproach(p,w,"No clear line of sight to chest "+c);
+            return;
+        }
+        List<BlockPos> rough=new ArrayList<BlockPos>();
+        for(PathNode goal:visibleGoals)rough.add(goal.blockPos());
+        route(p,w,rough,"chest-visible "+c,visibleGoals);
     }
+
+    /**
+     * Only create final A* goals from positions where a block ray reaches the
+     * chest itself. This avoids choosing a reachable but wall-blocked side.
+     */
+    private List<PathNode> visibleChestApproachGoals(EntityPlayerSP p,World w,BlockPos c,int radius){
+        List<PathNode> result=new ArrayList<PathNode>();
+        net.minecraft.util.BlockPos target=new net.minecraft.util.BlockPos(c.x,c.y,c.z);
+        double maxReachSquared=25.0D;
+        for(BlockPos candidate:ChestApproachPlanner.candidates(c,radius,4)){
+            if(failedChestApproaches.contains(candidate))continue;
+            for(int half=0;half<=1;half++){
+                for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
+                    PathNode node=new PathNode(candidate.x,candidate.y*2+half,candidate.z,lane);
+                    double dx=node.worldX()-(c.x+0.5D);
+                    double dy=node.feetY()-(c.y+0.5D);
+                    double dz=node.worldZ()-(c.z+0.5D);
+                    if(dx*dx+dy*dy+dz*dz>maxReachSquared)continue;
+                    if(hasClearChestSight(w,p.getEyeHeight(),node,target))result.add(node);
+                }
+            }
+        }
+        return result;
+    }
+
+    private boolean hasClearChestSight(World w,float eyeHeight,PathNode position,
+                                       net.minecraft.util.BlockPos target){
+        double[][] faces={
+                {0.50D,0.45D,0.07D},{0.50D,0.45D,0.93D},
+                {0.07D,0.45D,0.50D},{0.93D,0.45D,0.50D},
+                {0.50D,0.93D,0.50D},{0.50D,0.07D,0.50D}
+        };
+        Vec3 eye=new Vec3(position.worldX(),position.feetY()+eyeHeight,position.worldZ());
+        for(double[] face:faces){
+            Vec3 end=new Vec3(target.getX()+face[0],target.getY()+face[1],target.getZ()+face[2]);
+            MovingObjectPosition hit=w.rayTraceBlocks(eye,end,false,true,false);
+            if(isTargetChestHit(hit,target))return true;
+        }
+        return false;
+    }
+
     private void routePatrol(EntityPlayerSP p,World w){
         int y=MathHelper.floor_double(p.getEntityBoundingBox().minY);
         if(patrolOrigin==null)patrolOrigin=new BlockPos(GATE.x,y,GATE.z);
@@ -1106,6 +1162,8 @@ public final class GeodeClient {
                 return;
             }else if("chest scaffold staging".equals(why)&&chest!=null){
                 failScaffold(p,w,"Scaffold staging position is not reachable");
+            }else if(why.startsWith("chest-visible ")&&chest!=null){
+                skipBlockedChest(w,"No reachable line-of-sight position for "+chest);
             }else if(progressTarget==null&&why.startsWith("chest ")&&chest!=null){
                 retryChestApproach(p,w,"No safe approach cells for "+chest);
             }else{
@@ -1183,6 +1241,8 @@ public final class GeodeClient {
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.endsWith("transit")
                     &&chestTransitRange>12){
                 retryChestTransit(p,mc.theWorld,"No path for chest transit segment");
+            }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.startsWith("chest-visible ")){
+                skipBlockedChest(mc.theWorld,"No route to a visible side of chest "+chest+" ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
                 retryChestApproach(p,mc.theWorld,"No route to chest "+chest+" ("+r.expanded+" nodes)");
             }else if(stage==Stage.WATER_RECOVERY){
@@ -1496,9 +1556,7 @@ public final class GeodeClient {
             return;
         }
         if(chestAimTicks>120&&openAttempts==0){
-            cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
-            status="No clear crosshair line to chest "+chest+"; skipping";
-            chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            skipBlockedChest(mc.theWorld,"Could not align with a visible face of chest "+chest);
             return;
         }
         if(ticks<retryTicks)return;
@@ -1506,9 +1564,14 @@ public final class GeodeClient {
         ChestAimTarget target=findChestAim(p,bp);
         if(target==null){
             chestAimStableTicks=0;
+            if(chestAimTicks>=40){
+                failedChestApproaches.add(playerPos(p));
+                retryChestApproach(p,mc.theWorld,"Chest face blocked from current side");
+                return;
+            }
             if(++chestAimMissTicks>=10){
                 chestAimMissTicks=0;
-                status="Searching for a visible chest face";
+                status="No visible chest face; preparing another approach";
             }
             return;
         }
@@ -1558,18 +1621,10 @@ public final class GeodeClient {
                 {0.25D,0.86D,0.25D},{0.50D,0.86D,0.50D},{0.75D,0.86D,0.75D}
         };
         ChestAimTarget found=null;
-        ChestAimTarget nearestFaceFallback=null;
-        double nearestDistance=Double.POSITIVE_INFINITY;
         for(double[] sample:samples){
             double tx=bp.getX()+sample[0],ty=bp.getY()+sample[1],tz=bp.getZ()+sample[2];
             float yaw=ChestAimMath.yaw(p.posX,p.posZ,tx,tz);
             float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz);
-            double ddx=tx-p.posX,ddy=ty-(p.posY+p.getEyeHeight()),ddz=tz-p.posZ;
-            double distance=ddx*ddx+ddy*ddy+ddz*ddz;
-            if(distance<nearestDistance){
-                nearestDistance=distance;
-                nearestFaceFallback=new ChestAimTarget(yaw,pitch);
-            }
             p.rotationYaw=yaw;p.rotationPitch=pitch;
             if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
                 found=new ChestAimTarget(yaw,pitch);
@@ -1577,9 +1632,8 @@ public final class GeodeClient {
             }
         }
         p.rotationYaw=savedYaw;p.rotationPitch=savedPitch;
-        // A blocked ray must not prevent aiming. The final ray check below still
-        // prevents interaction until the crosshair actually hits this chest.
-        return found!=null?found:nearestFaceFallback;
+        // Never aim at a face through a wall. A null result triggers a new approach.
+        return found;
     }
 
     private boolean invokeVanillaRightClick(MovingObjectPosition hit){
