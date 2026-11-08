@@ -8,7 +8,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.client.gui.inventory.GuiChest;
+import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.inventory.Container;
+import net.minecraft.network.play.client.C0DPacketCloseWindow;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
@@ -248,7 +250,7 @@ public final class GeodeClient {
     private void beginServerHop(EntityPlayerSP p,boolean fromSewer){
         if(p==null||hopPhase!=HopPhase.NONE)return;
         suspendNavigation(p);
-        if(mc.currentScreen instanceof GuiChest)p.closeScreen();
+        closeActiveContainer(p);
         stage=Stage.IDLE;hopAttempts=0;hopTicks=0;hopRetryAt=0;
         String who=watchPlayerName.isEmpty()?"another player":watchPlayerName;
         if(fromSewer){
@@ -919,7 +921,7 @@ public final class GeodeClient {
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
-        if(mc.currentScreen instanceof GuiChest){
+        if(isContainerGuiOpen(p)){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
@@ -1008,15 +1010,36 @@ public final class GeodeClient {
         final float yaw,pitch;
         ChestAimTarget(float yaw,float pitch){this.yaw=yaw;this.pitch=pitch;}
     }
-    private void lootChest(EntityPlayerSP p){
-        if(!(mc.currentScreen instanceof GuiChest)){
-            finish(false);
-            return;
+    private boolean isContainerGuiOpen(EntityPlayerSP p){
+        return mc.currentScreen instanceof GuiContainer
+                ||(p!=null&&p.openContainer!=null&&p.inventoryContainer!=null
+                &&p.openContainer!=p.inventoryContainer);
+    }
+
+    /**
+     * Close both sides of the active container session. EntityPlayerSP.closeScreen()
+     * normally does this too, but explicitly sending the current window id also handles
+     * non-GuiChest container screens.
+     */
+    private boolean closeActiveContainer(EntityPlayerSP p){
+        if(p==null||!isContainerGuiOpen(p))return false;
+        Container active=p.openContainer;
+        int windowId=active==null?0:active.windowId;
+        if(p.sendQueue!=null){
+            p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(windowId));
         }
-        // Chest detection is enough: do not inspect, click, or transfer any contents.
-        p.closeScreen();
+        // Clear the carried stack, close the local container and remove its screen.
+        p.closeScreenAndDropStack();
+        return true;
+    }
+
+    private void lootChest(EntityPlayerSP p){
+        // Never click or transfer chest contents; close as soon as a container GUI appears.
+        boolean closed=closeActiveContainer(p);
         finish(false);
-        status="Chest opened and GUI closed without looting";
+        status=closed
+                ?"Chest GUI close packet sent; no items taken"
+                :"Chest GUI was already closed; searching for next";
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
