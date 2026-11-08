@@ -788,7 +788,8 @@ public final class GeodeClient {
             return;
         }
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
-        future=worker.submit(()->new Pathfinder().findNodes(snap,pathStart,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        final MinecraftPathWorld pathSnapshot=snap;
+        future=worker.submit(()->new Pathfinder().findNodes(pathSnapshot,pathStart,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
     }
     private void collectResult(EntityPlayerSP p){
         if(future==null||!future.isDone())return;
