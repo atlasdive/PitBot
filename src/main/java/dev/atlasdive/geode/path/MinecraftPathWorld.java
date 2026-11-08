@@ -133,6 +133,13 @@ public final class MinecraftPathWorld implements PathWorld {
         for(BlockPos goal:goals)nodes.add(PathNode.fromBlockPos(goal));
         return nodes;
     }
+    /** True when a node is inside this immutable collision snapshot's bounds. */
+    public boolean contains(PathNode p){
+        return p!=null&&p.x>=minX&&p.y2>=minY*2&&p.z>=minZ
+                &&p.x<minX+w&&p.y2<minY*2+halfH&&p.z<minZ+d;
+    }
+    public boolean contains(BlockPos p){return p!=null&&contains(PathNode.fromBlockPos(p));}
+
     private int index(int x,int y2,int z){return ((x-minX)*halfH+(y2-minY*2))*d+(z-minZ);}
     private int idx(PathNode p){
         if(p.x<minX||p.y2<minY*2||p.z<minZ||p.x>=minX+w||p.y2>=minY*2+halfH||p.z>=minZ+d)return -1;

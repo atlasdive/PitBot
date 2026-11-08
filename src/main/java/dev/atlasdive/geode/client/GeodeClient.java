@@ -35,12 +35,14 @@ import java.util.concurrent.*;
 public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
-    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
+    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SCANNING_SEWER,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
     private Future<PathResult> future;
+    private MinecraftPathWorld sewerSnapshot;
+    private World sewerSnapshotWorld;
     private Stage stage=Stage.IDLE;
     private boolean running,launchDetected,inSewer,deathRestartPending;
     private HopPhase hopPhase=HopPhase.NONE;
@@ -131,6 +133,7 @@ public final class GeodeClient {
                     stage=Stage.TO_GATE;status="Pathfinding through Sewer iron-bar opening";routeGate(p,w);
                 }
                 break;
+            case SCANNING_SEWER:movement.stop();break;
             case SEEK:
                 movement.stop();scanTicks++;
                 if(scanTicks>=GeodeConfig.scanIntervalTicks){scanTicks=0;findChest(p,w);}
@@ -191,29 +194,70 @@ public final class GeodeClient {
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
-        if(!running||!movement.hasPath()||mc.theWorld==null)return;
-        List<PathStep> steps=movement.getPath();
-        if(steps.size()<2)return;
+        if(!running||mc.theWorld==null)return;
         net.minecraft.client.renderer.entity.RenderManager rm=mc.getRenderManager();
-        int first=Math.max(1,movement.getIndex());
+        if(movement.hasPath()){
+            List<PathStep> steps=movement.getPath();
+            if(steps.size()>=2){
+                int first=Math.max(1,movement.getIndex());
+                GL11.glPushAttrib(GL11.GL_ENABLE_BIT|GL11.GL_LINE_BIT|GL11.GL_CURRENT_BIT|GL11.GL_DEPTH_BUFFER_BIT);
+                GL11.glDisable(GL11.GL_TEXTURE_2D);
+                GL11.glEnable(GL11.GL_BLEND);
+                GL11.glBlendFunc(GL11.GL_SRC_ALPHA,GL11.GL_ONE_MINUS_SRC_ALPHA);
+                GL11.glLineWidth(2.0F);
+                GL11.glDepthMask(false);
+                for(int i=first;i<steps.size();i++){
+                    PathStep a=steps.get(i-1),b=steps.get(i);
+                    if(b.kind==MovementKind.DROP)GL11.glColor4f(1.0F,0.62F,0.16F,0.95F);
+                    else if(b.kind==MovementKind.JUMP||b.kind==MovementKind.STEP_UP)GL11.glColor4f(0.95F,0.85F,0.20F,0.95F);
+                    else GL11.glColor4f(0.20F,0.85F,1.0F,0.90F);
+                    GL11.glBegin(GL11.GL_LINES);
+                    GL11.glVertex3d(a.targetX-rm.viewerPosX,a.feetY+0.08D-rm.viewerPosY,a.targetZ-rm.viewerPosZ);
+                    GL11.glVertex3d(b.targetX-rm.viewerPosX,b.feetY+0.08D-rm.viewerPosY,b.targetZ-rm.viewerPosZ);
+                    GL11.glEnd();
+                }
+                GL11.glPopAttrib();
+            }
+        }
+
+        // Render every loaded chest as a block-sized wireframe. Disabling depth testing
+        // makes the outline visible through walls and other blocks.
+        Set<BlockPos> rendered=new LinkedHashSet<BlockPos>();
+        for(Object value:mc.theWorld.loadedTileEntityList){
+            if(!(value instanceof TileEntityChest))continue;
+            net.minecraft.util.BlockPos pos=((TileEntityChest)value).getPos();
+            BlockPos chestPos=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
+            if(!rendered.add(chestPos))continue;
+            drawChestBox(chestPos,rm);
+        }
+    }
+
+    private void drawChestBox(BlockPos pos,net.minecraft.client.renderer.entity.RenderManager rm){
+        double x0=pos.x+0.015D-rm.viewerPosX,x1=pos.x+0.985D-rm.viewerPosX;
+        double y0=pos.y+0.015D-rm.viewerPosY,y1=pos.y+0.985D-rm.viewerPosY;
+        double z0=pos.z+0.015D-rm.viewerPosZ,z1=pos.z+0.985D-rm.viewerPosZ;
         GL11.glPushAttrib(GL11.GL_ENABLE_BIT|GL11.GL_LINE_BIT|GL11.GL_CURRENT_BIT|GL11.GL_DEPTH_BUFFER_BIT);
         GL11.glDisable(GL11.GL_TEXTURE_2D);
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA,GL11.GL_ONE_MINUS_SRC_ALPHA);
         GL11.glLineWidth(2.0F);
         GL11.glDepthMask(false);
-        for(int i=first;i<steps.size();i++){
-            PathStep a=steps.get(i-1),b=steps.get(i);
-            if(b.kind==MovementKind.DROP)GL11.glColor4f(1.0F,0.62F,0.16F,0.95F);
-            else if(b.kind==MovementKind.JUMP||b.kind==MovementKind.STEP_UP)GL11.glColor4f(0.95F,0.85F,0.20F,0.95F);
-            else GL11.glColor4f(0.20F,0.85F,1.0F,0.90F);
-            GL11.glBegin(GL11.GL_LINES);
-            GL11.glVertex3d(a.targetX-rm.viewerPosX,a.feetY+0.08D-rm.viewerPosY,a.targetZ-rm.viewerPosZ);
-            GL11.glVertex3d(b.targetX-rm.viewerPosX,b.feetY+0.08D-rm.viewerPosY,b.targetZ-rm.viewerPosZ);
-            GL11.glEnd();
-        }
-        GL11.glDepthMask(true);
+        GL11.glColor4f(0.15F,0.90F,1.0F,0.95F);
+        GL11.glBegin(GL11.GL_LINES);
+        chestBoxEdge(x0,y0,z0,x1,y0,z0); chestBoxEdge(x1,y0,z0,x1,y0,z1);
+        chestBoxEdge(x1,y0,z1,x0,y0,z1); chestBoxEdge(x0,y0,z1,x0,y0,z0);
+        chestBoxEdge(x0,y1,z0,x1,y1,z0); chestBoxEdge(x1,y1,z0,x1,y1,z1);
+        chestBoxEdge(x1,y1,z1,x0,y1,z1); chestBoxEdge(x0,y1,z1,x0,y1,z0);
+        chestBoxEdge(x0,y0,z0,x0,y1,z0); chestBoxEdge(x1,y0,z0,x1,y1,z0);
+        chestBoxEdge(x1,y0,z1,x1,y1,z1); chestBoxEdge(x0,y0,z1,x0,y1,z1);
+        GL11.glEnd();
         GL11.glPopAttrib();
+    }
+
+    private void chestBoxEdge(double x1,double y1,double z1,double x2,double y2,double z2){
+        GL11.glVertex3d(x1,y1,z1);
+        GL11.glVertex3d(x2,y2,z2);
     }
 
     private void toggle(){if(running){stop("Stopped by user");tell("Geode stopped.");}else start();}
@@ -231,7 +275,7 @@ public final class GeodeClient {
         suspendNavigation(p);
         inSewer=false;hopRetryAt=0;stage=Stage.TO_LAUNCH;
         launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;retryTicks=ticks;
+        cooldown.clear();chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;emptyScans=0;patrolLeg=0;patrolFailures=0;retryTicks=ticks;
         waterRecoveryRadius=8;waterResumeStage=Stage.SEEK;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
@@ -282,6 +326,7 @@ public final class GeodeClient {
         if(p==null||hopPhase!=HopPhase.NONE)return;
         suspendNavigation(p);
         closeActiveContainer(p);
+        sewerSnapshot=null;sewerSnapshotWorld=null;
         stage=Stage.IDLE;hopAttempts=0;hopTicks=0;hopRetryAt=0;
         String who=watchPlayerName.isEmpty()?"another player":watchPlayerName;
         if(fromSewer){
@@ -336,7 +381,7 @@ public final class GeodeClient {
         running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
         deathRestartPending=false;inSewer=false;movement.stop();
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
-        if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
+        if(future!=null)future.cancel(true);future=null;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
     }
@@ -608,7 +653,14 @@ public final class GeodeClient {
         List<PathNode> captureGoals=new ArrayList<PathNode>();
         if(exactGoals!=null)captureGoals.addAll(exactGoals);
         else for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
-        MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
+        MinecraftPathWorld snap=null;
+        boolean usingSewerSnapshot=inSewer&&sewerSnapshot!=null&&sewerSnapshotWorld==w
+                &&sewerSnapshot.contains(requestedStart);
+        if(usingSewerSnapshot){
+            for(PathNode goal:captureGoals)if(!sewerSnapshot.contains(goal)){usingSewerSnapshot=false;break;}
+        }
+        if(usingSewerSnapshot)snap=sewerSnapshot;
+        else snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
         PathNode resolvedStart=requestedStart;
         if(!snap.canStand(resolvedStart)){
             double nearest=Double.POSITIVE_INFINITY;
@@ -950,6 +1002,12 @@ public final class GeodeClient {
         status="Scaffold complete: 7 blocks placed; pathfinding from "+top+" to "+chest;
         scaffoldPlan=null;
         stage=Stage.TO_CHEST;
+        // The scaffold changed collision geometry; refresh the shared Sewer snapshot
+        // before using it for the route from the new standing position.
+        if(inSewer){
+            try{refreshSewerMapSnapshot(p,w);}
+            catch(RuntimeException ex){sewerSnapshot=null;sewerSnapshotWorld=null;}
+        }
         routeChestDirect(p,w,chest);
     }
 
@@ -999,7 +1057,18 @@ public final class GeodeClient {
         double bestDistance=Double.POSITIVE_INFINITY;
         long now=w.getTotalWorldTime();
         loadedChestTiles=0;excludedChestTiles=0;
+        for(BlockPos candidate:SewerChestLocations.registered()){
+            Long until=cooldown.get(candidate);
+            if(until!=null&&until>now)continue;
+            net.minecraft.util.BlockPos pos=new net.minecraft.util.BlockPos(candidate.x,candidate.y,candidate.z);
+            if(!w.isBlockLoaded(pos,false))continue;
+            Block block=w.getBlockState(pos).getBlock();
+            if(block!=net.minecraft.init.Blocks.chest&&block!=net.minecraft.init.Blocks.trapped_chest)continue;
+            double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
+            if(distance<bestDistance){bestDistance=distance;best=candidate;}
+        }
         BlockPos knownSpecial=findLoadedSpecialChest(w,now);
+        if(knownSpecial!=null)return knownSpecial;
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
             loadedChestTiles++;
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
@@ -1319,15 +1388,41 @@ public final class GeodeClient {
         previousGateFeet=feet;
     }
 
+    private void refreshSewerMapSnapshot(EntityPlayerSP p,World w){
+        List<PathNode> goals=new ArrayList<PathNode>();
+        for(BlockPos target:SewerChestLocations.allTargets())goals.add(PathNode.fromBlockPos(target));
+        PathNode start=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
+        sewerSnapshot=MinecraftPathWorld.capture(w,p,start,goals);
+        sewerSnapshotWorld=w;
+    }
+
+    private void beginSewerMapScan(EntityPlayerSP p,World w){
+        movement.stop();
+        if(future!=null)future.cancel(true);
+        future=null;
+        inSewer=true;
+        stage=Stage.SCANNING_SEWER;
+        status="Scanning Sewer blocks and building the chest route map";
+        try{
+            refreshSewerMapSnapshot(p,w);
+            status="Sewer map ready: "+SewerChestLocations.allTargets().size()+" candidate positions";
+        }catch(RuntimeException ex){
+            sewerSnapshot=null;sewerSnapshotWorld=null;
+            status="Sewer map scan failed: "+ex.getClass().getSimpleName()+"; using local scans";
+        }
+        stage=Stage.SEEK;
+        scanTicks=GeodeConfig.scanIntervalTicks;
+        tell("Sewer entered. Registered chest locations: "+SewerChestLocations.registered().size()
+                +"; special chest handlers retained.");
+        findChest(p,w);
+    }
+
     private void tickGateLanding(EntityPlayerSP p,World w){
         double feet=p.getEntityBoundingBox().minY;
         gateEntryTicks++;
         if(gateCrossed&&p.onGround&&feet<gatePlaneY-0.25D){
             setGateKeys(false);
-            stage=Stage.SEEK;inSewer=true;
-            scanTicks=GeodeConfig.scanIntervalTicks;
-            tell("Iron-bar gap crossed. Sewer reached; searching for existing chests.");
-            findChest(p,w);
+            beginSewerMapScan(p,w);
             return;
         }
         if(gateEntryTicks>240){
