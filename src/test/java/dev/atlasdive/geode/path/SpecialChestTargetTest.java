@@ -1,6 +1,8 @@
 package dev.atlasdive.geode.path;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -24,17 +26,21 @@ public class SpecialChestTargetTest {
         assertFalse(SpecialChestTarget.matches(null));
     }
 
-    @Test public void exposesEveryLaneForTheSpecialChestApproachCell() {
+    @Test public void exposesNearbyApproachCellsAndAllLanesWithoutUsingTheChestBlock() {
         for (int y = 61; y <= 63; y++) {
-            List<PathNode> goals = SpecialChestTarget.approachGoals(new BlockPos(99, y, 46));
-            assertEquals(PathNode.LANE_COUNT, goals.size());
-            for (int lane = 0; lane < PathNode.LANE_COUNT; lane++) {
-                PathNode goal = goals.get(lane);
-                assertEquals(99, goal.x);
+            BlockPos chest = new BlockPos(99, y, 46);
+            List<PathNode> goals = SpecialChestTarget.approachGoals(chest);
+            assertEquals(40, goals.size());
+            Set<String> unique = new HashSet<String>();
+            for (PathNode goal : goals) {
                 assertEquals((y - 3) * 2, goal.y2);
-                assertEquals(47, goal.z);
-                assertEquals(lane, goal.lane);
+                assertTrue(goal.x >= 98 && goal.x <= 100);
+                assertTrue(goal.z >= 46 && goal.z <= 48);
+                assertFalse("the occupied chest block must not be a standing goal",
+                        goal.x == chest.x && goal.z == chest.z);
+                unique.add(goal.x + ":" + goal.y2 + ":" + goal.z + ":" + goal.lane);
             }
+            assertEquals("every approach node must be unique", goals.size(), unique.size());
         }
     }
 
