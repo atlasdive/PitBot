@@ -30,10 +30,17 @@ public final class SpecialChestTarget {
      * expose every collision-tested lane in that same approach cell as a valid goal.
      */
     public static List<PathNode> approachGoals(BlockPos chest) {
-        PathNode anchor = PathNode.atWorld(99.0D, approachFeetY(chest), 47.5D);
-        List<PathNode> goals = new ArrayList<PathNode>(PathNode.LANE_COUNT);
-        for (int lane = 0; lane < PathNode.LANE_COUNT; lane++) {
-            goals.add(anchor.withLane(lane));
+        double feetY=approachFeetY(chest);
+        int baseX=99,baseZ=47;
+        List<PathNode> goals=new ArrayList<PathNode>(40);
+        for(int dx=-1;dx<=1;dx++){
+            for(int dz=-1;dz<=1;dz++){
+                int x=baseX+dx,z=baseZ+dz;
+                // Never choose the chest's own occupied block as a standing position.
+                if(x==chest.x&&z==chest.z)continue;
+                PathNode anchor=PathNode.atWorld(x+0.5D,feetY,z+0.5D);
+                for(int lane=0;lane<PathNode.LANE_COUNT;lane++)goals.add(anchor.withLane(lane));
+            }
         }
         return goals;
     }

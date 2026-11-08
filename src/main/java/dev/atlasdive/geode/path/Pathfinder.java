@@ -29,7 +29,7 @@ public final class Pathfinder {
                 PathNode shifted=cur.pos.withLane(lane);
                 if(world.canStand(shifted)&&world.transitionClear(cur.pos,shifted))
                     relax(shifted,MovementKind.WALK,cur.pos,
-                            cur.g+0.22D+centerLanePreferencePenalty(world,shifted),
+                            cur.g+0.85D+centerLanePreferencePenalty(world,shifted),
                             goals,best,parents,open);
             }
             boolean onClimbable=world.climbable(cur.pos);

@@ -150,10 +150,18 @@ public final class MovementController {
         if(trackedIndex!=index){trackedIndex=index;lastProbeDistance=metric;probeTicks=0;noProgressTicks=0;return;}
         if(++probeTicks<20)return;
         probeTicks=0;
-        if(metric>0.60D&&lastProbeDistance-metric<0.10D)noProgressTicks+=20;
-        else noProgressTicks=0;
-        lastProbeDistance=metric;
-        if(noProgressTicks>=80)stuck=true;
+        // Only count meaningful improvement as progress. Updating the baseline every
+        // sample allowed small circular/rotational oscillations to reset the stuck timer.
+        if(metric<lastProbeDistance-0.20D){
+            lastProbeDistance=metric;
+            noProgressTicks=0;
+        }else if(metric>0.60D){
+            noProgressTicks+=20;
+        }else{
+            noProgressTicks=0;
+            lastProbeDistance=metric;
+        }
+        if(noProgressTicks>=60)stuck=true;
     }
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
