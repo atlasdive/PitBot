@@ -2,6 +2,7 @@ package dev.atlasdive.geode.path;
 import java.util.*;
 public final class Pathfinder {
     private static final double EPS=1.0E-8D;
+    private static final double EDGE_STAIR_LANE_PENALTY=0.32D;
     public PathResult find(PathWorld world,BlockPos start,List<BlockPos> goals,int maxNodes,int maxFall){
         List<PathNode> nodes=new ArrayList<PathNode>(goals.size());
         for(BlockPos goal:goals)nodes.add(PathNode.fromBlockPos(goal));
@@ -108,7 +109,12 @@ public final class Pathfinder {
         double horizontal=Math.sqrt(dx*dx+dz*dz);
         double vertical=Math.abs(dyHalf)*0.5D;
         double lanePenalty=next.lane==from.lane?0.0D:0.18D;
-        double stepCost=horizontal+lanePenalty;
+        // On half-block stair steps, prefer the cell centre whenever it is actually
+        // standable. Keep the normal collision checks so narrow/blocked stairs still
+        // fall back to a supported side lane.
+        double stairEdgePenalty=(kind==MovementKind.STEP_UP||kind==MovementKind.STEP_DOWN)
+                &&next.lane!=PathNode.CENTER?EDGE_STAIR_LANE_PENALTY:0.0D;
+        double stepCost=horizontal+lanePenalty+stairEdgePenalty;
         if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
         else if(kind==MovementKind.SWIM)stepCost+=0.6D;
         else if(kind==MovementKind.CLIMB)stepCost+=0.30D;
