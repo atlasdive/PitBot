@@ -131,7 +131,7 @@ public final class GeodeClient {
         }
         if(hopPhase!=HopPhase.NONE){tickServerHop(p,w);return;}
         if(damageDetected&&retaliationTarget==null&&isPathfindingStage()){
-            EntityPlayer attacker=findRecentAttacker(p,w);
+            EntityLivingBase attacker=findRecentAttacker(p,w);
             if(attacker!=null)beginRetaliation(attacker);
             else status="Hit detected; attacker not identified nearby";
         }
