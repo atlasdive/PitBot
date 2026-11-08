@@ -42,6 +42,29 @@ public final class SewerEntrance {
         return null;
     }
 
+    /**
+     * Candidate landing cells around the requested interior point. Radius zero
+     * returns only the exact coordinate; larger radii are used only after the
+     * exact landing cell proves unavailable in the current collision snapshot.
+     */
+    public List<BlockPos> destinationCandidates(int radius) {
+        int limit = Math.max(0, Math.min(radius, 4));
+        List<BlockPos> candidates = new ArrayList<BlockPos>();
+        candidates.add(destination);
+        for (int ring = 1; ring <= limit; ring++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -ring; dx <= ring; dx++) {
+                    for (int dz = -ring; dz <= ring; dz++) {
+                        if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) continue;
+                        candidates.add(new BlockPos(destination.x + dx,
+                                destination.y + dy, destination.z + dz));
+                    }
+                }
+            }
+        }
+        return Collections.unmodifiableList(candidates);
+    }
+
     public String getId() { return id; }
     public BlockPos getStart() { return start; }
     public BlockPos getDestination() { return destination; }

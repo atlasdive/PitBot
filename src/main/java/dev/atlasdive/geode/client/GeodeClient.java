@@ -66,6 +66,7 @@ public final class GeodeClient {
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private final Set<String> failedSewerEntrances=new HashSet<String>();
     private SewerEntrance activeSewerEntrance;
+    private int sewerDestinationSearchRadius;
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -537,12 +538,31 @@ public final class GeodeClient {
     private void routeSewerEntranceDestination(EntityPlayerSP p,World w){
         if(activeSewerEntrance==null){routeGate(p,w);return;}
         BlockPos destination=activeSewerEntrance.getDestination();
+        List<BlockPos> candidates=activeSewerEntrance.destinationCandidates(sewerDestinationSearchRadius);
         status="Pathfinding from "+activeSewerEntrance.getStart()+" to Sewer interior "+destination
+                +" (search radius "+sewerDestinationSearchRadius+")"
                 +(activeSewerEntrance.passesThroughWater()?" via water":"");
-        route(p,w,Collections.singletonList(destination),"Sewer entry destination");
+        route(p,w,candidates,"Sewer entry destination");
     }
 
     private void failSewerEntrance(EntityPlayerSP p,World w,String reason){
+        if(stage==Stage.TO_SEWER_ENTRY_DESTINATION&&activeSewerEntrance!=null){
+            movement.stop();
+            if(sewerDestinationSearchRadius<4){
+                sewerDestinationSearchRadius++;
+                status=reason+"; retrying the selected destination near "+activeSewerEntrance.getDestination()
+                        +" (radius "+sewerDestinationSearchRadius+")";
+                retryTicks=ticks+5;
+            }else{
+                // Keep the selected entrance. Never redirect a player who reached its
+                // upper waypoint to a different Sewer entrance just because the
+                // interior endpoint is temporarily unreachable or its chunk is loading.
+                status=reason+"; keeping entrance "+activeSewerEntrance.getStart()
+                        +" and retrying "+activeSewerEntrance.getDestination();
+                retryTicks=ticks+40;
+            }
+            return;
+        }
         if(activeSewerEntrance!=null){
             failedSewerEntrances.add(activeSewerEntrance.getId());
             status=reason+"; trying another Sewer entrance ("+activeSewerEntrance.getId()+")";
@@ -875,7 +895,8 @@ public final class GeodeClient {
                     status="Route to Sewer entrance ready: "+activeSewerEntrance.getStart()
                             +" -> "+activeSewerEntrance.getDestination();
                 }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
-                    status="Route into Sewer ready ("+r.steps.size()+" steps)"
+                    PathStep endpoint=r.steps.get(r.steps.size()-1);
+                    status="Route into Sewer ready ("+r.steps.size()+" steps; endpoint "+endpoint.pos+")"
                             +(activeSewerEntrance!=null&&activeSewerEntrance.passesThroughWater()?" through water":"");
                 }else if(stage==Stage.TO_GATE){
                     BlockPos approach=r.steps.get(r.steps.size()-1).pos;
@@ -1536,7 +1557,7 @@ public final class GeodeClient {
 
     private void resetGateState(){
         gateLanding=null;gateDropSource=null;gateColumns.clear();gateApproachMap.clear();
-        activeSewerEntrance=null;failedSewerEntrances.clear();
+        activeSewerEntrance=null;failedSewerEntrances.clear();sewerDestinationSearchRadius=0;
         failedGateApproaches.clear();
         gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;gateEntryTicks=0;
         if(mc!=null)setGateKeys(false);

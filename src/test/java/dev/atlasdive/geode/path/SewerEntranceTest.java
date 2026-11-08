@@ -2,6 +2,7 @@ package dev.atlasdive.geode.path;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.List;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -26,6 +27,24 @@ public class SewerEntranceTest {
             assertSame(entrance, SewerEntrance.byStart(entrance.getStart()));
         }
         assertNull(SewerEntrance.byStart(new BlockPos(47, 66, 75)));
+    }
+
+    @Test public void destinationRetryCandidatesStayAroundTheSelectedInteriorPoint() {
+        SewerEntrance entrance = SewerEntrance.byStart(new BlockPos(106, 66, 54));
+        assertNotNull(entrance);
+
+        assertEquals(java.util.Collections.singletonList(new BlockPos(94, 58, 56)),
+                entrance.destinationCandidates(0));
+
+        List<BlockPos> nearby = entrance.destinationCandidates(1);
+        assertTrue(nearby.contains(new BlockPos(94, 58, 56)));
+        assertTrue(nearby.contains(new BlockPos(93, 58, 56)));
+        assertTrue(nearby.contains(new BlockPos(95, 59, 56)));
+        for (BlockPos candidate : nearby) {
+            assertTrue(Math.abs(candidate.x - 94) <= 1);
+            assertTrue(Math.abs(candidate.y - 58) <= 1);
+            assertTrue(Math.abs(candidate.z - 56) <= 1);
+        }
     }
 
     @Test public void routeIdsAreUnique() {
