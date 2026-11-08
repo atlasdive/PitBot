@@ -6,6 +6,18 @@ import java.util.Set;
 import static org.junit.Assert.*;
 
 public class PathfinderTest {
+    @Test public void largeMultiGoalSetStillFindsTheNearestReachableGoal(){
+        TestWorld world=new TestWorld();
+        java.util.List<PathNode> goals=new java.util.ArrayList<PathNode>();
+        for(int i=0;i<1500;i++)goals.add(new PathNode(5,2,4,PathNode.CENTER));
+        goals.add(new PathNode(4,2,4,PathNode.CENTER));
+        PathResult result=new Pathfinder().findNodes(world,new PathNode(0,2,0,PathNode.CENTER),
+                goals,10000,8);
+        assertTrue("A* should handle a large set of chest approach goals",result.found());
+        assertEquals("the nearest reachable target should be selected",
+                new BlockPos(4,1,4),result.steps.get(result.steps.size()-1).pos);
+    }
+
     @Test public void findsFlatFloorRoute(){
         TestWorld world=new TestWorld();
         PathResult result=new Pathfinder().find(world,new BlockPos(0,1,0),

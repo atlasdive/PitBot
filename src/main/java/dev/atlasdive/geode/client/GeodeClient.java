@@ -42,8 +42,12 @@ public final class GeodeClient {
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
-    private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
+    private static final long PATH_SEARCH_TIMEOUT_NANOS=TimeUnit.SECONDS.toNanos(15L);
+    private ExecutorService worker=createPathWorker();
     private Future<PathResult> future;
+    private long futureStartedAtNanos;
+    private String futurePurpose="";
+    private int pathTimeoutCount;
     private MinecraftPathWorld sewerSnapshot;
     private World sewerSnapshotWorld;
     private Stage stage=Stage.IDLE;
@@ -521,8 +525,7 @@ public final class GeodeClient {
         retaliationCpsWindowTicks=0;retaliationAttackClock.reset();
         setRetaliationKeys(false,false);
         movement.stop();
-        if(future!=null)future.cancel(true);
-        future=null;
+        cancelPathSearch(false);
         restoreScaffoldState(p);
         scaffoldPlan=null;scaffoldIndex=0;
     }
@@ -618,10 +621,32 @@ public final class GeodeClient {
         retaliationCpsWindowTicks=0;retaliationAttackClock.reset();
         setRetaliationKeys(false,false);
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
-        if(future!=null)future.cancel(true);future=null;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
+        cancelPathSearch(false);pathTimeoutCount=0;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
     }
+    private static ExecutorService createPathWorker(){
+        return Executors.newSingleThreadExecutor(r->{
+            Thread thread=new Thread(r,"Geode-AStar");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    /** Cancel the active task and optionally replace an executor that stopped responding. */
+    private void cancelPathSearch(boolean restartWorker){
+        Future<PathResult> pending=future;
+        future=null;
+        futureStartedAtNanos=0L;
+        futurePurpose="";
+        if(pending!=null)pending.cancel(true);
+        if(restartWorker){
+            ExecutorService previous=worker;
+            worker=createPathWorker();
+            if(previous!=null)previous.shutdownNow();
+        }
+    }
+
     private void tickRoute(EntityPlayerSP p,World w){
         if(stage==Stage.PATROL&&++patrolScanTicks>=GeodeConfig.scanIntervalTicks){
             patrolScanTicks=0;
@@ -1023,7 +1048,7 @@ public final class GeodeClient {
 
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why,
                       List<PathNode> exactGoals,BlockPos progressTarget){
-        if(future!=null)future.cancel(true);movement.stop();
+        cancelPathSearch(false);movement.stop();
         BlockPos start=playerPos(p);
         PathNode requestedStart=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
         lastStart=start;
@@ -1182,14 +1207,33 @@ public final class GeodeClient {
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
         final MinecraftPathWorld pathSnapshot=snap;
         future=worker.submit(()->new Pathfinder().findNodes(pathSnapshot,pathStart,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        futureStartedAtNanos=System.nanoTime();
+        futurePurpose=why;
     }
     private void collectResult(EntityPlayerSP p){
-        if(future==null||!future.isDone())return;
-        Future<PathResult> f=future;future=null;
+        Future<PathResult> f=future;
+        if(f==null)return;
+        if(!f.isDone()){
+            if(futureStartedAtNanos>0L
+                    &&System.nanoTime()-futureStartedAtNanos>=PATH_SEARCH_TIMEOUT_NANOS){
+                String timedOutPurpose=futurePurpose.length()==0?purpose:futurePurpose;
+                cancelPathSearch(true);
+                movement.stop();
+                pathTimeoutCount=Math.min(pathTimeoutCount+1,99);
+                retryTicks=ticks+20;
+                status="Pathfinding timed out for "+timedOutPurpose
+                        +"; background worker restarted, retry "+pathTimeoutCount;
+            }
+            return;
+        }
+        future=null;
+        futureStartedAtNanos=0L;
+        futurePurpose="";
         try{
             PathResult r=f.get();
             expandedNodes=r.expanded;
             if(r.found()){
+                pathTimeoutCount=0;
                 if(stage==Stage.TO_SEWER_ENTRY_START){
                     PathStep endpoint=r.steps.get(r.steps.size()-1);
                     if(activeSewerEntrance==null
@@ -1250,8 +1294,12 @@ public final class GeodeClient {
                 retryTicks=ticks+40;
             }
         }catch(Exception ex){
-            if(stage==Stage.TO_SCAFFOLD&&chest!=null)failScaffold(p,mc.theWorld,"Scaffold path search error: "+ex.getClass().getSimpleName());
-            else{status="Path search error: "+ex.getClass().getSimpleName();retryTicks=ticks+30;}
+            if(ex instanceof InterruptedException)Thread.currentThread().interrupt();
+            Throwable cause=ex.getCause()==null?ex:ex.getCause();
+            String error=cause.getClass().getSimpleName();
+            if(ex instanceof CancellationException)error="Cancelled";
+            if(stage==Stage.TO_SCAFFOLD&&chest!=null)failScaffold(p,mc.theWorld,"Scaffold path search error: "+error);
+            else{movement.stop();status="Path search error: "+error+"; retrying";retryTicks=ticks+10;}
         }
     }
     private void beginScaffold(EntityPlayerSP p){
@@ -1811,8 +1859,7 @@ public final class GeodeClient {
 
     private void beginSewerMapScan(EntityPlayerSP p,World w){
         movement.stop();
-        if(future!=null)future.cancel(true);
-        future=null;
+        cancelPathSearch(false);
         inSewer=true;
         stage=Stage.SCANNING_SEWER;
         status="Scanning Sewer blocks and building the chest route map";
