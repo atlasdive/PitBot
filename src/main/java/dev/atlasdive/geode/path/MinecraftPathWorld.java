@@ -4,6 +4,8 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockLadder;
 import net.minecraft.block.BlockVine;
 import net.minecraft.block.BlockPane;
+import net.minecraft.block.BlockSlab;
+import net.minecraft.block.BlockStairs;
 import net.minecraft.block.BlockFence;
 import net.minecraft.block.BlockWall;
 import net.minecraft.block.material.Material;
@@ -18,7 +20,7 @@ import java.util.List;
 
 /** Immutable collision snapshot with lane-specific support and clearance masks. */
 public final class MinecraftPathWorld implements PathWorld {
-    private static final byte HAZARD=1,CLIMB=2,LIQUID=4,GATE_BARRIER=8;
+    private static final byte HAZARD=1,CLIMB=2,LIQUID=4,GATE_BARRIER=8,CENTER_ONLY=16;
     private static final double[] OFFSET_X={0.0D,-0.35D,0.35D,0.0D,0.0D};
     private static final double[] OFFSET_Z={0.0D,0.0D,0.0D,-0.35D,0.35D};
     private final int minX,minY,minZ,w,h,d,halfH;
@@ -92,6 +94,16 @@ public final class MinecraftPathWorld implements PathWorld {
             boolean hazard=m==Material.lava||b==Blocks.lava||b==Blocks.flowing_lava
                     ||b==Blocks.fire||b==Blocks.cactus;
             boolean climb=b instanceof BlockLadder||b instanceof BlockVine;
+            // The player's feet cell can be the stair/slab block itself or the air cell
+            // immediately above it, depending on the top surface elevation.
+            boolean centerOnly=b instanceof BlockSlab||b instanceof BlockStairs;
+            if(!centerOnly){
+                net.minecraft.util.BlockPos supportPos=p.down();
+                if(world.isBlockLoaded(supportPos,false)){
+                    Block support=world.getBlockState(supportPos).getBlock();
+                    centerOnly=support instanceof BlockSlab||support instanceof BlockStairs;
+                }
+            }
             boolean gateBarrier=b==Blocks.iron_bars||b instanceof BlockPane||b instanceof BlockFence
                     ||b instanceof BlockWall||b.isOpaqueCube();
             int i=out.index(x,y2,z);
@@ -108,7 +120,8 @@ public final class MinecraftPathWorld implements PathWorld {
                         state.getValue(BlockVine.NORTH),state.getValue(BlockVine.EAST),
                         state.getValue(BlockVine.SOUTH),state.getValue(BlockVine.WEST));
             }
-            byte f=0;if(hazard)f|=HAZARD;if(climb)f|=CLIMB;if(liquid)f|=LIQUID;if(gateBarrier)f|=GATE_BARRIER;
+            byte f=0;if(hazard)f|=HAZARD;if(climb)f|=CLIMB;if(liquid)f|=LIQUID;
+            if(gateBarrier)f|=GATE_BARRIER;if(centerOnly)f|=CENTER_ONLY;
             out.flags[i]=f;
             float c=0F;if(b==Blocks.water||b==Blocks.flowing_water)c+=1.0F;
             if(b==Blocks.web)c+=8F;if(b==Blocks.soul_sand)c+=1F;out.costs[i]=c;
@@ -130,6 +143,7 @@ public final class MinecraftPathWorld implements PathWorld {
     public boolean canStand(PathNode p){
         int i=idx(p);if(i<0)return false;
         byte f=flags[i];int bit=1<<p.lane;
+        if((f&CENTER_ONLY)!=0&&p.lane!=PathNode.CENTER)return false;
         if((clearMasks[i]&bit)==0||(f&HAZARD)!=0)return false;
         if((f&CLIMB)!=0){
             int vineMask=vineMasks[i]&0xFF;
@@ -137,6 +151,7 @@ public final class MinecraftPathWorld implements PathWorld {
         }
         return (standMasks[i]&bit)!=0||(f&LIQUID)!=0;
     }
+    @Override public boolean centerOnly(PathNode p){return(flags(p)&CENTER_ONLY)!=0;}
     public boolean clear(BlockPos p){return clear(PathNode.fromBlockPos(p));}
     public boolean clear(PathNode p){int i=idx(p);return i>=0&&(clearMasks[i]&(1<<p.lane))!=0;}
     public boolean hazard(BlockPos p){return hazard(PathNode.fromBlockPos(p));}

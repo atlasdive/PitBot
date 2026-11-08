@@ -49,8 +49,9 @@ public final class MovementController {
             double metric=Math.sqrt(distance*distance+vertical*vertical);
             if(step.kind!=MovementKind.DROP&&index>0){
                 PathStep previous=path.get(index-1);
+                double crossTrackLimit=step.centerOnly?0.16D:0.90D;
                 if(WaypointGeometry.hasPassedCheckpoint(previous.targetX,previous.targetZ,
-                        step.targetX,step.targetZ,player.posX,player.posZ,0.90D)){
+                        step.targetX,step.targetZ,player.posX,player.posZ,crossTrackLimit)){
                     advance();
                     continue;
                 }
@@ -87,7 +88,8 @@ public final class MovementController {
                 // lets the player land before beginScaffold validates the placement base.
                 release();trackProgress(metric);return;
             }
-            if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<0.34D){advance();continue;}
+            double waypointRadius=step.centerOnly?0.16D:WAYPOINT_RADIUS;
+            if(distance<=waypointRadius&&Math.abs(vertical)<0.34D){advance();continue;}
             break;
         }
         if(index>=path.size()){release();return;}
