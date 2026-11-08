@@ -12,7 +12,7 @@ import java.util.List;
 public final class MovementController {
     private static final double WAYPOINT_RADIUS=0.52D;
     private static final double DROP_ALIGNMENT=0.16D;
-    private static final float TURN_RATE=5.0F;
+    private static final float TURN_RATE=12.0F;
     private static final float WALK_ALIGNMENT=12.0F;
     private static final float SPRINT_ALIGNMENT=4.0F;
     private static final float SWIM_ALIGNMENT=18.0F;
@@ -111,7 +111,9 @@ public final class MovementController {
             float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
             float difference=MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw);
             float angleError=Math.abs(difference);
-            float turnRate=angleError>45.0F?TURN_RATE:angleError>18.0F?3.5F:2.0F;
+            // Turn quickly while far from the target, then taper near alignment.
+            // Each step is clamped to the remaining error, so this cannot overshoot.
+            float turnRate=angleError>45.0F?TURN_RATE:angleError>18.0F?8.0F:5.0F;
             player.rotationYaw+=MathHelper.clamp_float(difference,-turnRate,turnRate);
             if(angleError>WALK_ALIGNMENT){
                 setForward(false);setJump(false);setSprint(false);
@@ -138,7 +140,7 @@ public final class MovementController {
     private void steerForClimb(EntityPlayerSP player,int lane){
         float target=VineTraversal.yawForLane(lane,player.rotationYaw);
         float difference=MathHelper.wrapAngleTo180_float(target-player.rotationYaw);
-        player.rotationYaw+=MathHelper.clamp_float(difference,-5.0F,5.0F);
+        player.rotationYaw+=MathHelper.clamp_float(difference,-8.0F,8.0F);
         player.rotationYawHead=player.rotationYaw;
     }
     private void steer(EntityPlayerSP player,double dx,double dz){
