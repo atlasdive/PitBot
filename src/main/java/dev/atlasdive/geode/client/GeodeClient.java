@@ -70,7 +70,9 @@ public final class GeodeClient {
     private int sewerDestinationSearchRadius;
     private EntityPlayer retaliationTarget;
     private World retaliationWorld;
-    private int retaliationExpiresTick,retaliationLastAttackTick=-20;
+    private int retaliationExpiresTick,retaliationCpsWindowTicks,retaliationCps=17;
+    private final Random retaliationRandom=new Random();
+    private final CpsAttackClock retaliationAttackClock=new CpsAttackClock(17);
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -164,7 +166,7 @@ public final class GeodeClient {
     @SubscribeEvent public void onLivingHurt(LivingHurtEvent event){
         if(!running||mc.thePlayer==null||mc.theWorld==null
                 ||event.entity!=mc.thePlayer||event.source==null)return;
-        if(!isPathfindingStage()||(!movement.hasPath()&&future==null))return;
+        if(!isPathfindingStage())return;
         net.minecraft.entity.Entity source=event.source.getEntity();
         if(!(source instanceof EntityPlayer))source=event.source.getSourceOfDamage();
         if(!(source instanceof EntityPlayer))return;
@@ -175,7 +177,10 @@ public final class GeodeClient {
         retaliationTarget=attacker;
         retaliationWorld=mc.theWorld;
         retaliationExpiresTick=ticks+100;
-        retaliationLastAttackTick=ticks-10;
+        retaliationCps=16+retaliationRandom.nextInt(3);
+        retaliationCpsWindowTicks=0;
+        retaliationAttackClock.setCps(retaliationCps);
+        retaliationAttackClock.reset();
         movement.pause();
         status="Hit by "+attacker.getName()+"; retaliating";
     }
@@ -219,17 +224,32 @@ public final class GeodeClient {
         float distance=player.getDistanceToEntity(target);
         boolean visible=player.canEntityBeSeen(target);
         float yawError=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw));
-        boolean forward=visible&&distance>3.15F&&distance<=8.0F&&yawError<=25.0F;
+        boolean forward=visible&&distance>3.0F&&distance<=8.0F&&yawError<=25.0F;
         boolean sprint=forward&&distance>4.5F&&yawError<=10.0F&&player.onGround;
         setRetaliationKeys(forward,sprint);
 
-        if(visible&&distance<=3.15F&&yawError<=20.0F
-                &&mc.currentScreen==null&&ticks-retaliationLastAttackTick>=10){
+        // Pick a target rate once per second. The tick accumulator emits exactly
+        // 16, 17, or 18 attacks over 20 eligible client ticks.
+        if(++retaliationCpsWindowTicks>=20){
+            retaliationCpsWindowTicks=0;
+            retaliationCps=16+retaliationRandom.nextInt(3);
+            retaliationAttackClock.setCps(retaliationCps);
+        }
+
+        boolean crosshairTarget=mc.objectMouseOver!=null
+                &&mc.objectMouseOver.typeOfHit==MovingObjectPosition.MovingObjectType.ENTITY
+                &&mc.objectMouseOver.entityHit==target;
+        boolean attackReady=visible&&distance<=3.0F&&crosshairTarget&&mc.currentScreen==null;
+        if(retaliationAttackClock.tick(attackReady)){
+            // Match vanilla 1.8.9 clickMouse(): swing first (C0A), then
+            // attackEntity() syncs the held slot if needed (C09) and sends ATTACK (C02).
+            player.swingItem();
             mc.playerController.attackEntity(player,target);
-            retaliationLastAttackTick=ticks;
-            status="Retaliating against "+target.getName();
+            status="Retaliating against "+target.getName()+" ("+retaliationCps+" CPS)";
         }else if(forward){
             status="Closing distance to attacker "+target.getName();
+        }else if(distance<=3.0F){
+            status="Aligning crosshair with attacker "+target.getName();
         }else{
             status="Tracking attacker "+target.getName();
         }
@@ -249,7 +269,7 @@ public final class GeodeClient {
         retaliationTarget=null;
         retaliationWorld=null;
         retaliationExpiresTick=0;
-        retaliationLastAttackTick=-20;
+        retaliationCpsWindowTicks=0;retaliationAttackClock.reset();
         movement.pause();
         setRetaliationKeys(false,false);
         status="Retaliation ended; resuming pathfinding";
@@ -398,7 +418,7 @@ public final class GeodeClient {
 
     private void suspendNavigation(EntityPlayerSP p){
         retaliationTarget=null;retaliationWorld=null;retaliationExpiresTick=0;
-        retaliationLastAttackTick=-20;
+        retaliationCpsWindowTicks=0;retaliationAttackClock.reset();
         setRetaliationKeys(false,false);
         movement.stop();
         if(future!=null)future.cancel(true);
@@ -495,7 +515,7 @@ public final class GeodeClient {
         running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
         deathRestartPending=false;inSewer=false;movement.stop();
         retaliationTarget=null;retaliationWorld=null;retaliationExpiresTick=0;
-        retaliationLastAttackTick=-20;
+        retaliationCpsWindowTicks=0;retaliationAttackClock.reset();
         setRetaliationKeys(false,false);
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
         if(future!=null)future.cancel(true);future=null;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
