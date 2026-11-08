@@ -9,6 +9,8 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.client.gui.inventory.GuiChest;
+import net.minecraft.inventory.ContainerChest;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
@@ -34,7 +36,6 @@ public final class GeodeClient {
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
     private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
-    private static final BlockPos AIMED_CHEST=new BlockPos(99,61,46);
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
@@ -919,84 +920,129 @@ public final class GeodeClient {
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
-        if(isContainerGuiOpen(p)){
+        if(isChestGuiOpen(p)){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
-        if(AIMED_CHEST.equals(chest)){
-            tickAimedChestOpen(p,bp);
-            return;
-        }
-        if(ticks<retryTicks)return;
-        if(openAttempts>=3){cooldown.put(chest,w.getTotalWorldTime()+200L);chest=null;stage=Stage.SEEK;return;}
-        openAttempts++;retryTicks=ticks+12;
-        mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
+        tickChestOpen(p,bp);
     }
 
-    private void tickAimedChestOpen(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
+    /**
+     * Opens every chest through Minecraft's normal crosshair right-click pipeline.
+     * The old generic path sent a fixed UP-face click at the block centre without
+     * proving that the chest was actually under the crosshair.
+     */
+    private void tickChestOpen(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
         chestAimTicks++;
         if(openAttempts>=3&&ticks>=retryTicks){
             cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
-            status="Special chest did not open after 3 verified interaction attempts; skipping";
+            status="Chest did not open after 3 vanilla right-click attempts; skipping";
             chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
             return;
         }
         if(chestAimTicks>120&&openAttempts==0){
             cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
-            status="Could not get a clear view of special chest "+chest+"; skipping";
+            status="No clear crosshair line to chest "+chest+"; skipping";
             chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
             return;
         }
         if(ticks<retryTicks)return;
+
         ChestAimTarget target=findChestAim(p,bp);
-        double tx=bp.getX()+0.5D,ty=bp.getY()+0.48D,tz=bp.getZ()+0.998D;
-        float yaw=target==null?ChestAimMath.yaw(p.posX,p.posZ,tx,tz):target.yaw;
-        float pitch=target==null?ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz):target.pitch;
-        float yawDifference=MathHelper.wrapAngleTo180_float(yaw-p.rotationYaw);
-        float pitchDifference=pitch-p.rotationPitch;
+        if(target==null){
+            chestAimStableTicks=0;
+            if(++chestAimMissTicks>=10){
+                chestAimMissTicks=0;
+                status="Searching for a visible chest face";
+            }
+            return;
+        }
+        float yawDifference=MathHelper.wrapAngleTo180_float(target.yaw-p.rotationYaw);
+        float pitchDifference=target.pitch-p.rotationPitch;
         p.rotationYaw+=MathHelper.clamp_float(yawDifference,-10.0F,10.0F);
         p.rotationPitch+=MathHelper.clamp_float(pitchDifference,-8.0F,8.0F);
         p.rotationYawHead=p.rotationYaw;
-        if(Math.abs(yawDifference)<=2.0F&&Math.abs(pitchDifference)<=2.0F){
-            if(++chestAimStableTicks<2)return;
-            MovingObjectPosition hit=p.rayTrace(5.0D,1.0F);
-            if(isTargetChestHit(hit,bp)){
-                retryTicks=ticks+12;
-                boolean sent=mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),
-                        hit.getBlockPos(),hit.sideHit,hit.hitVec);
-                if(sent){openAttempts++;p.swingItem();}
-                status="Aimed at special chest using a verified line of sight";
-                chestAimStableTicks=0;chestAimMissTicks=0;
-            }else{
-                chestAimStableTicks=0;
-                if(++chestAimMissTicks>=10){
-                    chestAimMissTicks=0;
-                    status="Adjusting chest aim; ray trace has not reached the chest yet";
-                }
+        if(Math.abs(yawDifference)>2.0F||Math.abs(pitchDifference)>2.0F){
+            chestAimStableTicks=0;
+            return;
+        }
+        if(++chestAimStableTicks<2)return;
+
+        MovingObjectPosition hit=p.rayTrace(5.0D,1.0F);
+        if(!isTargetChestHit(hit,bp)){
+            chestAimStableTicks=0;
+            if(++chestAimMissTicks>=10){
+                chestAimMissTicks=0;
+                status="Crosshair ray missed chest; adjusting aim";
             }
-        }else chestAimStableTicks=0;
+            return;
+        }
+
+        if(invokeVanillaRightClick(hit)){
+            openAttempts++;
+            retryTicks=ticks+12;
+            status="Vanilla right-click sent to visible chest face (attempt "+openAttempts+"/3)";
+        }else{
+            status="Could not invoke Minecraft's vanilla right-click method";
+            retryTicks=ticks+20;
+        }
+        chestAimStableTicks=0;chestAimMissTicks=0;
     }
 
     private ChestAimTarget findChestAim(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
         float savedYaw=p.rotationYaw,savedPitch=p.rotationPitch;
-        double[] xOffsets={0.50D,0.25D,0.75D};
-        double[] yOffsets={0.48D,0.22D,0.74D};
+        // Samples lie just inside the chest's six visible faces. The ray trace decides
+        // which face is actually reachable, including around walls and double chests.
+        double[][] samples={
+                {0.50D,0.20D,0.07D},{0.25D,0.45D,0.07D},{0.75D,0.45D,0.07D},
+                {0.50D,0.20D,0.93D},{0.25D,0.45D,0.93D},{0.75D,0.45D,0.93D},
+                {0.07D,0.20D,0.50D},{0.07D,0.45D,0.25D},{0.07D,0.45D,0.75D},
+                {0.93D,0.20D,0.50D},{0.93D,0.45D,0.25D},{0.93D,0.45D,0.75D},
+                {0.25D,0.86D,0.25D},{0.50D,0.86D,0.50D},{0.75D,0.86D,0.75D}
+        };
         ChestAimTarget found=null;
-        for(double x:xOffsets){
-            for(double y:yOffsets){
-                float yaw=ChestAimMath.yaw(p.posX,p.posZ,bp.getX()+x,bp.getZ()+0.998D);
-                float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,
-                        bp.getX()+x,bp.getY()+y,bp.getZ()+0.998D);
-                p.rotationYaw=yaw;p.rotationPitch=pitch;
-                if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
-                    found=new ChestAimTarget(yaw,pitch);
-                    break;
-                }
+        for(double[] sample:samples){
+            double tx=bp.getX()+sample[0],ty=bp.getY()+sample[1],tz=bp.getZ()+sample[2];
+            float yaw=ChestAimMath.yaw(p.posX,p.posZ,tx,tz);
+            float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz);
+            p.rotationYaw=yaw;p.rotationPitch=pitch;
+            if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
+                found=new ChestAimTarget(yaw,pitch);
+                break;
             }
-            if(found!=null)break;
         }
         p.rotationYaw=savedYaw;p.rotationPitch=savedPitch;
         return found;
+    }
+
+    private boolean invokeVanillaRightClick(MovingObjectPosition hit){
+        if(hit==null||hit.typeOfHit!=MovingObjectPosition.MovingObjectType.BLOCK)return false;
+        // Match PitAutoEnchanter: feed the verified crosshair hit into Minecraft's own
+        // right-click handler instead of constructing an approximate block interaction.
+        mc.objectMouseOver=hit;
+        try{
+            java.lang.reflect.Field delay=null;
+            for(String name:new String[]{"rightClickDelayTimer","field_71467_ac"}){
+                try{delay=mc.getClass().getDeclaredField(name);break;}
+                catch(NoSuchFieldException ignored){}
+            }
+            if(delay==null)return false;
+            delay.setAccessible(true);
+            delay.setInt(mc,0);
+
+            java.lang.reflect.Method click=null;
+            for(String name:new String[]{"rightClickMouse","func_147121_ag"}){
+                try{click=mc.getClass().getDeclaredMethod(name);break;}
+                catch(NoSuchMethodException ignored){}
+            }
+            if(click==null)return false;
+            click.setAccessible(true);
+            click.invoke(mc);
+            return true;
+        }catch(Throwable failure){
+            status="Vanilla right-click failed: "+failure.getClass().getSimpleName();
+            return false;
+        }
     }
 
     private boolean isTargetChestHit(MovingObjectPosition hit,net.minecraft.util.BlockPos bp){
@@ -1011,6 +1057,12 @@ public final class GeodeClient {
     private boolean isContainerGuiOpen(EntityPlayerSP p){
         return mc.currentScreen instanceof GuiContainer
                 ||(p!=null&&p.openContainer!=null&&p.inventoryContainer!=null
+                &&p.openContainer!=p.inventoryContainer);
+    }
+
+    private boolean isChestGuiOpen(EntityPlayerSP p){
+        return mc.currentScreen instanceof GuiChest
+                ||(p!=null&&p.openContainer instanceof ContainerChest
                 &&p.openContainer!=p.inventoryContainer);
     }
 
