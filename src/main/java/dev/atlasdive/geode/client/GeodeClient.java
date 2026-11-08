@@ -1138,9 +1138,8 @@ public final class GeodeClient {
             if(r.found()){
                 if(stage==Stage.TO_SEWER_ENTRY_START){
                     PathStep endpoint=r.steps.get(r.steps.size()-1);
-                    activeSewerEntrance=SewerEntrance.byStart(endpoint.pos);
                     if(activeSewerEntrance==null
-                            ||!activeSewerEntrance.getStart().equals(endpoint.pos.blockPos())){
+                            ||!activeSewerEntrance.getStart().equals(endpoint.pos)){
                         failSewerEntrance(p,mc.theWorld,"Could not resolve the selected Sewer entrance endpoint");
                         return;
                     }
