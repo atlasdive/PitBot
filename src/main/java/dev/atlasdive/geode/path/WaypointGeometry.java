@@ -26,6 +26,17 @@ public final class WaypointGeometry {
         return horizontalDistance<=horizontalRadius&&Math.abs(verticalDifference)<0.34D;
     }
 
+    /**
+     * A scaffold approach must not complete its final waypoint while airborne.
+     * The caller then releases movement and waits for a grounded tick before building.
+     */
+    public static boolean shouldWaitForGroundAtFinalWaypoint(boolean finalWaypoint,
+            boolean requireGround,boolean onGround,double horizontalDistance,
+            double verticalDifference,double horizontalRadius){
+        return finalWaypoint&&requireGround&&!onGround
+                &&hasReachedWaypoint(horizontalDistance,verticalDifference,horizontalRadius);
+    }
+
     /** A turn is sharp when the incoming and outgoing segment directions diverge. */
     public static boolean isSharpTurn(double previousX,double previousZ,
             double waypointX,double waypointZ,double nextX,double nextZ,double thresholdDegrees){

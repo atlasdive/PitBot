@@ -697,7 +697,7 @@ public final class GeodeClient {
                 }else{
                     status=purpose+" path ready ("+r.steps.size()+" steps)";
                 }
-                movement.setPath(r.steps,p);
+                movement.setPath(r.steps,p,stage==Stage.TO_SCAFFOLD);
             }else if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
                 beginWaterRecovery(p,mc.theWorld);
             }else if(stage==Stage.PATROL){

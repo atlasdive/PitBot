@@ -17,13 +17,17 @@ public final class MovementController {
     private List<PathStep> path=Collections.emptyList();
     private int index,probeTicks,noProgressTicks,trackedIndex=-1;
     private double lastProbeDistance=Double.POSITIVE_INFINITY;
-    private boolean stuck;
+    private boolean stuck,waitForGroundAtEnd;
 
     public void setPath(List<PathStep> steps,EntityPlayerSP player){
+        setPath(steps,player,false);
+    }
+    public void setPath(List<PathStep> steps,EntityPlayerSP player,boolean waitForGroundAtEnd){
         path=steps==null?Collections.<PathStep>emptyList():steps;
         index=Math.min(1,Math.max(0,path.size()-1));
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;
         lastProbeDistance=Double.POSITIVE_INFINITY;stuck=false;
+        this.waitForGroundAtEnd=waitForGroundAtEnd;
         release();
     }
     public boolean hasPath(){return !path.isEmpty();}
@@ -75,6 +79,13 @@ public final class MovementController {
                 steerForClimb(player,step.node.lane);
                 setForward(true);setJump(false);setSneak(vertical< -0.20D);
                 setSprint(false);trackProgress(metric);return;
+            }
+            if(WaypointGeometry.shouldWaitForGroundAtFinalWaypoint(
+                    index==path.size()-1,waitForGroundAtEnd,player.onGround,
+                    distance,vertical,WAYPOINT_RADIUS)){
+                // A scaffold route must finish on solid ground. Releasing movement here
+                // lets the player land before beginScaffold validates the placement base.
+                release();trackProgress(metric);return;
             }
             if(distance<=WAYPOINT_RADIUS&&Math.abs(vertical)<0.34D){advance();continue;}
             break;
@@ -137,6 +148,7 @@ public final class MovementController {
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;lastProbeDistance=Double.POSITIVE_INFINITY;
+        waitForGroundAtEnd=false;
     }
     private void releaseForwardAndJump(){setForward(false);setJump(false);setSneak(false);setSprint(false);}
     private void setForward(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindForward,v);}
