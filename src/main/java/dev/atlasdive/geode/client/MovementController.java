@@ -18,14 +18,12 @@ public final class MovementController {
     private int index,probeTicks,noProgressTicks,trackedIndex=-1;
     private double lastProbeDistance=Double.POSITIVE_INFINITY;
     private boolean stuck;
-    private int dashJumpCooldown=40;
 
     public void setPath(List<PathStep> steps,EntityPlayerSP player){
         path=steps==null?Collections.<PathStep>emptyList():steps;
         index=Math.min(1,Math.max(0,path.size()-1));
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;
         lastProbeDistance=Double.POSITIVE_INFINITY;stuck=false;
-        dashJumpCooldown=Math.max(dashJumpCooldown,40);
         release();
     }
     public boolean hasPath(){return !path.isEmpty();}
@@ -37,7 +35,6 @@ public final class MovementController {
     public void tick(EntityPlayerSP player){
         if(player==null||!hasPath()||complete()){release();return;}
         if(stuck){release();return;}
-        if(dashJumpCooldown>0)dashJumpCooldown--;
         double feet=player.getEntityBoundingBox().minY;
         PathStep step;
         double dx,dz,distance,vertical;
@@ -100,10 +97,7 @@ public final class MovementController {
                 setSprint(sprint);
                 boolean stepJump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
                         ||step.kind==MovementKind.JUMP)&&player.onGround&&distance<2.5D;
-                boolean dashJump=WaypointGeometry.shouldDashJump(sprint,step.kind,sharpTurn,
-                        player.onGround,distance,vertical,dashJumpCooldown==0);
-                if(dashJump)dashJumpCooldown=95;
-                setJump(stepJump||dashJump);
+                setJump(stepJump);
             }
         }else{setForward(false);setJump(false);setSprint(false);}
         setSneak(false);trackProgress(metric);
@@ -137,7 +131,6 @@ public final class MovementController {
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;lastProbeDistance=Double.POSITIVE_INFINITY;
-        dashJumpCooldown=40;
     }
     private void releaseForwardAndJump(){setForward(false);setJump(false);setSneak(false);setSprint(false);}
     private void setForward(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindForward,v);}

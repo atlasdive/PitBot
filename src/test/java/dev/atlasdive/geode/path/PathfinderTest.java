@@ -419,14 +419,6 @@ public class PathfinderTest {
         assertEquals(MovementKind.CLIMB,result.steps.get(1).kind);
     }
 
-    @Test public void dashJumpsOnlyOnSafeStraightSprintSegments(){
-        assertTrue(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,4.0D,0.0D,true));
-        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,true,true,4.0D,0.0D,true));
-        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.CLIMB,false,true,4.0D,0.0D,true));
-        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,false,4.0D,0.0D,true));
-        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,2.0D,0.0D,true));
-        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,4.0D,0.0D,false));
-    }
 
     private static final class VineWorld extends TestWorld {
         @Override public boolean canStand(PathNode p){
