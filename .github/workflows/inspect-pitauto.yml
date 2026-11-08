@@ -1,0 +1,75 @@
+name: Inspect PitAutoEnchanter GUI close handling
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "PitAutoEnchanter-V4.2.1-tier-detection-fix.jar"
+      - ".github/workflows/inspect-pitauto.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Inspect JAR classes and GUI/container references
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="PitAutoEnchanter-V4.2.1-tier-detection-fix.jar"
+          OUT="$RUNNER_TEMP/pitauto-inspection"
+          CLASSES="$OUT/classes"
+          mkdir -p "$OUT" "$CLASSES"
+          unzip -q "$JAR" -d "$CLASSES"
+          {
+            echo "FILE: $JAR"
+            sha256sum "$JAR"
+            echo
+            echo "=== MANIFEST ==="
+            unzip -p "$JAR" META-INF/MANIFEST.MF || true
+            echo
+            echo "=== CLASS FILES ==="
+            find "$CLASSES" -type f -name '*.class' | sed "s#^$CLASSES/##" | sort
+          } > "$OUT/summary.txt"
+          : > "$OUT/gui-references.txt"
+          : > "$OUT/javap.txt"
+          find "$CLASSES" -type f -name '*.class' | sort | while IFS= read -r f; do
+            rel="${f#"$CLASSES/"}"
+            cls="${rel%.class}"
+            cls="${cls//\//.}"
+            hits="$(strings -a "$f" | grep -Ei 'GuiScreen|GuiContainer|GuiChest|Container|closeScreen|displayGuiScreen|onGuiClosed|CloseWindow|windowClick|C0DPacket|S2EPacketCloseWindow|openContainer|inventoryContainer' || true)"
+            if [[ -n "$hits" ]]; then
+              {
+                echo "===== $rel ====="
+                printf '%s\n' "$hits"
+                echo
+              } >> "$OUT/gui-references.txt"
+              {
+                echo "===== $cls ====="
+                javap -classpath "$CLASSES" -c -p "$cls" 2>&1 || true
+                echo
+              } >> "$OUT/javap.txt"
+            fi
+          done
+          echo "=== GUI STRING / CONSTANT-POOL REFERENCES ===" >> "$OUT/summary.txt"
+          cat "$OUT/gui-references.txt" >> "$OUT/summary.txt"
+          echo "=== DISASSEMBLY ===" >> "$OUT/summary.txt"
+          cat "$OUT/javap.txt" >> "$OUT/summary.txt"
+          cp "$OUT/summary.txt" pitauto-gui-inspection.txt
+      - name: Upload inspection report
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitAutoEnchanter-GUI-inspection
+          path: pitauto-gui-inspection.txt
+          if-no-files-found: error
+          retention-days: 7
