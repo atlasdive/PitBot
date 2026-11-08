@@ -148,9 +148,12 @@ public final class GeodeClient {
     @SubscribeEvent public void onGuiOpen(GuiOpenEvent e){
         if(!running||chest==null||(stage!=Stage.OPEN&&stage!=Stage.LOOT))return;
         if(e.gui instanceof GuiChest){
-            e.setCanceled(true);
+            // Do NOT cancel this event. GuiContainer.initGui() must run so it assigns
+            // the real chest Container to player.openContainer. NetHandlerPlayClient
+            // sets its windowId immediately after displayGUIChest() returns; canceling
+            // the event leaves inventoryContainer active and corrupts its windowId.
             chestGuiOpenIntercepted=true;
-            status="Intercepted chest GUI open event";
+            status="Chest GUI initialized; closing its server container next tick";
         }
     }
 
