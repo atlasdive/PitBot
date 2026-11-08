@@ -2,7 +2,7 @@ package dev.atlasdive.geode.path;
 import java.util.*;
 public final class Pathfinder {
     private static final double EPS=1.0E-8D;
-    private static final double EDGE_STAIR_LANE_PENALTY=0.32D;
+    private static final double CENTER_LANE_PREFERENCE_PENALTY=0.40D;
     public PathResult find(PathWorld world,BlockPos start,List<BlockPos> goals,int maxNodes,int maxFall){
         List<PathNode> nodes=new ArrayList<PathNode>(goals.size());
         for(BlockPos goal:goals)nodes.add(PathNode.fromBlockPos(goal));
@@ -28,7 +28,9 @@ public final class Pathfinder {
                 if(lane==cur.pos.lane)continue;
                 PathNode shifted=cur.pos.withLane(lane);
                 if(world.canStand(shifted)&&world.transitionClear(cur.pos,shifted))
-                    relax(shifted,MovementKind.WALK,cur.pos,cur.g+0.22D,goals,best,parents,open);
+                    relax(shifted,MovementKind.WALK,cur.pos,
+                            cur.g+0.22D+centerLanePreferencePenalty(world,shifted),
+                            goals,best,parents,open);
             }
             if(world.climbable(cur.pos)||world.liquid(cur.pos)){
                 MovementKind verticalKind=world.climbable(cur.pos)?MovementKind.CLIMB:MovementKind.SWIM;
@@ -76,6 +78,7 @@ public final class Pathfinder {
                         double horizontal=Math.sqrt(d[0]*d[0]+d[1]*d[1]);
                         double lanePenalty=lane==cur.pos.lane?0.0D:0.18D;
                         relax(next,kind,cur.pos,cur.g+horizontal+lanePenalty
+                                +centerLanePreferencePenalty(world,next)
                                 +Math.max(0.0D,world.extraCost(next)),goals,best,parents,open);
                     }
                 }
@@ -109,17 +112,21 @@ public final class Pathfinder {
         double horizontal=Math.sqrt(dx*dx+dz*dz);
         double vertical=Math.abs(dyHalf)*0.5D;
         double lanePenalty=next.lane==from.lane?0.0D:0.18D;
-        // On half-block stair steps, prefer the cell centre whenever it is actually
-        // standable. Keep the normal collision checks so narrow/blocked stairs still
-        // fall back to a supported side lane.
-        double stairEdgePenalty=(kind==MovementKind.STEP_UP||kind==MovementKind.STEP_DOWN)
-                &&next.lane!=PathNode.CENTER?EDGE_STAIR_LANE_PENALTY:0.0D;
-        double stepCost=horizontal+lanePenalty+stairEdgePenalty;
+        // Prefer the centre of any traversable surface (including half slabs), not
+        // just stair transitions. A side lane is penalized only when the centre lane
+        // at that exact feet position is also collision-tested as standable.
+        double stepCost=horizontal+lanePenalty+centerLanePreferencePenalty(world,next);
         if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
         else if(kind==MovementKind.SWIM)stepCost+=0.6D;
         else if(kind==MovementKind.CLIMB)stepCost+=0.30D;
         relax(next,kind,from,base+stepCost+Math.max(0.0D,world.extraCost(next)),
                 goals,best,parents,open);
+    }
+    private static double centerLanePreferencePenalty(PathWorld world,PathNode node){
+        if(node.lane==PathNode.CENTER)return 0.0D;
+        PathNode center=node.withLane(PathNode.CENTER);
+        return world.canStand(center)&&world.transitionClear(node,center)
+                ?CENTER_LANE_PREFERENCE_PENALTY:0.0D;
     }
     private static void relax(PathNode next,MovementKind kind,PathNode from,double g,List<PathNode> goals,
             Map<PathNode,Double> best,Map<PathNode,Parent> parents,PriorityQueue<Entry> open){
