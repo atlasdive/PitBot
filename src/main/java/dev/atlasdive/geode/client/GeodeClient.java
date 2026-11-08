@@ -23,6 +23,7 @@ import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.client.event.GuiOpenEvent;
+import net.minecraftforge.event.entity.living.LivingHurtEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import org.lwjgl.opengl.GL11;
@@ -67,6 +68,9 @@ public final class GeodeClient {
     private final Set<String> failedSewerEntrances=new HashSet<String>();
     private SewerEntrance activeSewerEntrance;
     private int sewerDestinationSearchRadius;
+    private EntityPlayer retaliationTarget;
+    private World retaliationWorld;
+    private int retaliationExpiresTick,retaliationLastAttackTick=-20;
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -117,6 +121,10 @@ public final class GeodeClient {
             }
         }
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
+        if(retaliationTarget!=null){
+            tickRetaliation(p,w);
+            return;
+        }
         if(hasOtherListedPlayerInWatchArea(p,w)){
             beginServerHop(p,inSewer);
             return;
@@ -146,6 +154,105 @@ public final class GeodeClient {
             case LOOT:lootChest(p);break;
             default:movement.stop();
         }
+    }
+
+    /**
+     * Only react to a real player who damaged the local player while Geode was
+     * actively following or computing a navigation path. Environmental damage
+     * and hits outside a pathfinding stage never initiate combat.
+     */
+    @SubscribeEvent public void onLivingHurt(LivingHurtEvent event){
+        if(!running||mc.thePlayer==null||mc.theWorld==null
+                ||event.entity!=mc.thePlayer||event.source==null)return;
+        if(!isPathfindingStage()||(!movement.hasPath()&&future==null))return;
+        net.minecraft.entity.Entity source=event.source.getEntity();
+        if(!(source instanceof EntityPlayer))source=event.source.getSourceOfDamage();
+        if(!(source instanceof EntityPlayer))return;
+        EntityPlayer attacker=(EntityPlayer)source;
+        if(attacker==mc.thePlayer||attacker.isDead||attacker.worldObj!=mc.theWorld
+                ||isBotIdentity(attacker.getName()))return;
+
+        retaliationTarget=attacker;
+        retaliationWorld=mc.theWorld;
+        retaliationExpiresTick=ticks+100;
+        retaliationLastAttackTick=ticks-10;
+        movement.pause();
+        status="Hit by "+attacker.getName()+"; retaliating";
+    }
+
+    private boolean isPathfindingStage(){
+        switch(stage){
+            case TO_LAUNCH:case TO_GATE:case TO_SEWER_ENTRY_START:case TO_SEWER_ENTRY_DESTINATION:
+            case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void tickRetaliation(EntityPlayerSP player,World world){
+        EntityPlayer target=retaliationTarget;
+        if(target==null)return;
+        if(world==null||world!=retaliationWorld||target.worldObj!=world
+                ||target.isDead||!target.isEntityAlive()
+                ||ticks>retaliationExpiresTick||player.getDistanceToEntity(target)>8.0F){
+            clearRetaliation();
+            return;
+        }
+
+        // Hold the current A* route without discarding it. It resumes once the
+        // brief defensive engagement ends.
+        movement.pause();
+        double dx=target.posX-player.posX;
+        double dz=target.posZ-player.posZ;
+        double horizontal=Math.sqrt(dx*dx+dz*dz);
+        double targetEye=target.posY+target.getEyeHeight()*0.85D;
+        double playerEye=player.posY+player.getEyeHeight();
+        float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+        float targetPitch=(float)(-Math.toDegrees(Math.atan2(targetEye-playerEye,Math.max(0.001D,horizontal))));
+        float yawDifference=MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw);
+        float pitchDifference=targetPitch-player.rotationPitch;
+        player.rotationYaw+=MathHelper.clamp_float(yawDifference,-24.0F,24.0F);
+        player.rotationPitch+=MathHelper.clamp_float(pitchDifference,-18.0F,18.0F);
+        player.rotationYawHead=player.rotationYaw;
+
+        float distance=player.getDistanceToEntity(target);
+        boolean visible=player.canEntityBeSeen(target);
+        float yawError=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw));
+        boolean forward=visible&&distance>3.15F&&distance<=8.0F&&yawError<=25.0F;
+        boolean sprint=forward&&distance>4.5F&&yawError<=10.0F&&player.onGround;
+        setRetaliationKeys(forward,sprint);
+
+        if(visible&&distance<=3.15F&&yawError<=20.0F
+                &&mc.currentScreen==null&&ticks-retaliationLastAttackTick>=10){
+            mc.playerController.attackEntity(player,target);
+            retaliationLastAttackTick=ticks;
+            status="Retaliating against "+target.getName();
+        }else if(forward){
+            status="Closing distance to attacker "+target.getName();
+        }else{
+            status="Tracking attacker "+target.getName();
+        }
+    }
+
+    private void setRetaliationKeys(boolean forward,boolean sprint){
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),forward);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindSprint.getKeyCode(),sprint);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindBack.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindLeft.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindRight.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindJump.getKeyCode(),false);
+        KeyBinding.setKeyBindState(mc.gameSettings.keyBindSneak.getKeyCode(),false);
+    }
+
+    private void clearRetaliation(){
+        retaliationTarget=null;
+        retaliationWorld=null;
+        retaliationExpiresTick=0;
+        retaliationLastAttackTick=-20;
+        movement.pause();
+        setRetaliationKeys(false,false);
+        status="Retaliation ended; resuming pathfinding";
     }
 
     /**
@@ -290,6 +397,9 @@ public final class GeodeClient {
     }
 
     private void suspendNavigation(EntityPlayerSP p){
+        retaliationTarget=null;retaliationWorld=null;retaliationExpiresTick=0;
+        retaliationLastAttackTick=-20;
+        setRetaliationKeys(false,false);
         movement.stop();
         if(future!=null)future.cancel(true);
         future=null;
@@ -384,6 +494,9 @@ public final class GeodeClient {
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
         deathRestartPending=false;inSewer=false;movement.stop();
+        retaliationTarget=null;retaliationWorld=null;retaliationExpiresTick=0;
+        retaliationLastAttackTick=-20;
+        setRetaliationKeys(false,false);
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
         if(future!=null)future.cancel(true);future=null;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;

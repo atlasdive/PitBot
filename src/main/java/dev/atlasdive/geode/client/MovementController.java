@@ -170,6 +170,8 @@ public final class MovementController {
         }
         if(noProgressTicks>=60)stuck=true;
     }
+    /** Releases movement keys while preserving the current route and waypoint index. */
+    public void pause(){release();}
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;lastProbeDistance=Double.POSITIVE_INFINITY;
