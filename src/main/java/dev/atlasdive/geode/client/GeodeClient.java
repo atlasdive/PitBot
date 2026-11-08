@@ -35,7 +35,7 @@ import java.util.concurrent.*;
 public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
-    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SCANNING_SEWER,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
+    private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,TO_SEWER_ENTRY_START,TO_SEWER_ENTRY_DESTINATION,ENTER_GATE,WAIT_GATE_LANDING,SCANNING_SEWER,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
@@ -64,6 +64,8 @@ public final class GeodeClient {
     private final Set<BlockPos> gateColumns=new HashSet<BlockPos>();
     private final Map<BlockPos,BlockPos> gateApproachMap=new HashMap<BlockPos,BlockPos>();
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
+    private final Set<String> failedSewerEntrances=new HashSet<String>();
+    private SewerEntrance activeSewerEntrance;
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -121,7 +123,8 @@ public final class GeodeClient {
         if(stage==Stage.IDLE){beginSewerRun(p,w);return;}
         collectResult(p);
         switch(stage){
-            case TO_LAUNCH:case TO_GATE:case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:tickRoute(p,w);break;
+            case TO_LAUNCH:case TO_GATE:case TO_SEWER_ENTRY_START:case TO_SEWER_ENTRY_DESTINATION:
+            case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:tickRoute(p,w);break;
             case BUILD_SCAFFOLD:tickScaffold(p,w);break;
             case ENTER_GATE:tickGateEntry(p);break;
             case WAIT_GATE_LANDING:movement.stop();tickGateLanding(p,w);break;
@@ -280,7 +283,7 @@ public final class GeodeClient {
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
         chestAimStableTicks=0;chestAimMissTicks=0;chestAimTicks=0;
-        failedGateApproaches.clear();resetGateState();
+        failedGateApproaches.clear();failedSewerEntrances.clear();activeSewerEntrance=null;resetGateState();
         tell("Sewer entry sequence started. Pathfinding to (16, 95, 16).");
         routeLaunch(p,w);
     }
@@ -406,6 +409,8 @@ public final class GeodeClient {
             }else if(stage==Stage.WATER_RECOVERY){
                 waterRecoveryRadius=Math.min(16,waterRecoveryRadius+4);
                 routeWaterRecovery(p,w);
+            }else if(stage==Stage.TO_SEWER_ENTRY_START||stage==Stage.TO_SEWER_ENTRY_DESTINATION){
+                failSewerEntrance(p,w,"Sewer entrance route stalled");
             }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("Patrol waypoint blocked; advancing to the next spiral point");
             }else if(stage==Stage.TO_SCAFFOLD){
@@ -428,6 +433,12 @@ public final class GeodeClient {
         if(stage==Stage.TO_LAUNCH){
             launchX=p.posX;launchY=p.posY;launchZ=p.posZ;waitTicks=0;launchDetected=false;
             stage=Stage.WAIT_LAUNCH;status="At LaunchPad - waiting for launch and landing";
+        }else if(stage==Stage.TO_SEWER_ENTRY_START){
+            if(activeSewerEntrance==null){routeLegacyGate(p,w);return;}
+            stage=Stage.TO_SEWER_ENTRY_DESTINATION;
+            routeSewerEntranceDestination(p,w);
+        }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
+            beginSewerMapScan(p,w);
         }else if(stage==Stage.TO_GATE){
             double feet=p.getEntityBoundingBox().minY;
             if(gateLanding!=null&&gateDropSource!=null){
@@ -466,7 +477,11 @@ public final class GeodeClient {
                 status="Patrol point reached; scanning the newly loaded area";
             }
         }else if(stage==Stage.WATER_RECOVERY){
-            if(waterResumeStage==Stage.TO_CHEST&&chest!=null){
+            if(waterResumeStage==Stage.TO_SEWER_ENTRY_START){
+                stage=Stage.TO_SEWER_ENTRY_START;routeGate(p,w);
+            }else if(waterResumeStage==Stage.TO_SEWER_ENTRY_DESTINATION&&activeSewerEntrance!=null){
+                stage=Stage.TO_SEWER_ENTRY_DESTINATION;routeSewerEntranceDestination(p,w);
+            }else if(waterResumeStage==Stage.TO_CHEST&&chest!=null){
                 stage=Stage.TO_CHEST;routeChest(p,w,chest);
             }else if(waterResumeStage==Stage.TO_SCAFFOLD&&chest!=null){
                 stage=Stage.TO_SCAFFOLD;routeScaffoldStaging(p,w);
@@ -482,15 +497,32 @@ public final class GeodeClient {
     private void reRoute(EntityPlayerSP p,World w){
         if(stage==Stage.WATER_RECOVERY)routeWaterRecovery(p,w);
         else if(stage==Stage.TO_LAUNCH)routeLaunch(p,w);
-        else if(stage==Stage.TO_GATE)routeGate(p,w);
+        else if(stage==Stage.TO_GATE||stage==Stage.TO_SEWER_ENTRY_START)routeGate(p,w);
+        else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION)routeSewerEntranceDestination(p,w);
         else if(stage==Stage.TO_CHEST&&chest!=null)routeChest(p,w,chest);
         else if(stage==Stage.TO_SCAFFOLD&&chest!=null)routeScaffoldStaging(p,w);
         else if(stage==Stage.PATROL)routePatrol(p,w);
     }
     private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
     private void routeGate(EntityPlayerSP p,World w){
-        // The marked coordinate is approximate. The planner scans a small area around it,
-        // detects a real iron-bar frame, and only accepts a clear shaft through that frame.
+        List<BlockPos> available=new ArrayList<BlockPos>();
+        for(SewerEntrance entrance:SewerEntrance.all()){
+            if(!failedSewerEntrances.contains(entrance.getId()))available.add(entrance.getStart());
+        }
+        if(!available.isEmpty()){
+            activeSewerEntrance=null;
+            stage=Stage.TO_SEWER_ENTRY_START;
+            status="Pathfinding to one of "+available.size()+" registered Sewer entrances";
+            route(p,w,available,"Sewer entry start");
+            return;
+        }
+        routeLegacyGate(p,w);
+    }
+
+    /** Keep the original dynamically detected grate as a fallback route. */
+    private void routeLegacyGate(EntityPlayerSP p,World w){
+        activeSewerEntrance=null;
+        stage=Stage.TO_GATE;
         List<BlockPos> volume=new ArrayList<BlockPos>();
         int radius=GeodeConfig.gateScanRadius;
         for(int dx=-radius;dx<=radius;dx++)for(int dz=-radius;dz<=radius;dz++){
@@ -498,7 +530,30 @@ public final class GeodeClient {
             for(int y=GATE.y+2-GeodeConfig.maxFallBlocks;y<GATE.y;y++)
                 volume.add(new BlockPos(GATE.x+dx,y,GATE.z+dz));
         }
+        status="No registered Sewer entrance available; scanning the original grate";
         route(p,w,volume,"Sewer opening");
+    }
+
+    private void routeSewerEntranceDestination(EntityPlayerSP p,World w){
+        if(activeSewerEntrance==null){routeGate(p,w);return;}
+        BlockPos destination=activeSewerEntrance.getDestination();
+        status="Pathfinding from "+activeSewerEntrance.getStart()+" to Sewer interior "+destination
+                +(activeSewerEntrance.passesThroughWater()?" via water":"");
+        route(p,w,Collections.singletonList(destination),"Sewer entry destination");
+    }
+
+    private void failSewerEntrance(EntityPlayerSP p,World w,String reason){
+        if(activeSewerEntrance!=null){
+            failedSewerEntrances.add(activeSewerEntrance.getId());
+            status=reason+"; trying another Sewer entrance ("+activeSewerEntrance.getId()+")";
+        }else{
+            status=reason+"; falling back to the original grate";
+            routeLegacyGate(p,w);
+            return;
+        }
+        activeSewerEntrance=null;
+        movement.stop();
+        routeGate(p,w);
     }
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
         if(!c.equals(activeChestRouteTarget)){
@@ -754,7 +809,14 @@ public final class GeodeClient {
         }
         goalCandidates=pathGoals.size();
         if(pathGoals.isEmpty()){
-            if(p.isInWater()&&!"Water escape".equals(why)){
+            if("Sewer entry start".equals(why)){
+                status="No reachable registered Sewer entrance start; trying the original grate";
+                routeLegacyGate(p,w);
+                return;
+            }else if("Sewer entry destination".equals(why)){
+                failSewerEntrance(p,w,"No standable path to the registered Sewer interior");
+                return;
+            }else if(p.isInWater()&&!"Water escape".equals(why)){
                 beginWaterRecovery(p,w);
                 return;
             }else if("Water escape".equals(why)){
@@ -802,7 +864,20 @@ public final class GeodeClient {
             PathResult r=f.get();
             expandedNodes=r.expanded;
             if(r.found()){
-                if(stage==Stage.TO_GATE){
+                if(stage==Stage.TO_SEWER_ENTRY_START){
+                    PathStep endpoint=r.steps.get(r.steps.size()-1);
+                    activeSewerEntrance=SewerEntrance.byStart(endpoint.pos);
+                    if(activeSewerEntrance==null){
+                        status="Could not identify the selected Sewer entrance; trying the original grate";
+                        routeLegacyGate(p,mc.theWorld);
+                        return;
+                    }
+                    status="Route to Sewer entrance ready: "+activeSewerEntrance.getStart()
+                            +" -> "+activeSewerEntrance.getDestination();
+                }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
+                    status="Route into Sewer ready ("+r.steps.size()+" steps)"
+                            +(activeSewerEntrance!=null&&activeSewerEntrance.passesThroughWater()?" through water":"");
+                }else if(stage==Stage.TO_GATE){
                     BlockPos approach=r.steps.get(r.steps.size()-1).pos;
                     BlockPos aperture=gateApproachMap.get(approach);
                     if(aperture==null){
@@ -825,6 +900,11 @@ public final class GeodeClient {
                 movement.setPath(r.steps,p,stage==Stage.TO_SCAFFOLD);
             }else if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
                 beginWaterRecovery(p,mc.theWorld);
+            }else if(stage==Stage.TO_SEWER_ENTRY_START){
+                status="No path to registered Sewer entrance start ("+r.expanded+" nodes); trying the original grate";
+                routeLegacyGate(p,mc.theWorld);
+            }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
+                failSewerEntrance(p,mc.theWorld,"No route to Sewer interior ("+r.expanded+" nodes)");
             }else if(stage==Stage.PATROL){
                 skipPatrolWaypoint("No path to patrol waypoint ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_SCAFFOLD&&chest!=null){
@@ -1416,6 +1496,7 @@ public final class GeodeClient {
             status="Sewer map scan failed: "+ex.getClass().getSimpleName()+"; using local scans";
         }
         stage=Stage.SEEK;
+        activeSewerEntrance=null;
         scanTicks=GeodeConfig.scanIntervalTicks;
         tell("Sewer entered. Registered chest locations: "+SewerChestLocations.registered().size()
                 +"; special chest handlers retained.");
@@ -1455,6 +1536,7 @@ public final class GeodeClient {
 
     private void resetGateState(){
         gateLanding=null;gateDropSource=null;gateColumns.clear();gateApproachMap.clear();
+        activeSewerEntrance=null;failedSewerEntrances.clear();
         failedGateApproaches.clear();
         gateCrossed=false;previousGateFeet=Double.NaN;gatePlaneY=GATE.y;gateEntryTicks=0;
         if(mc!=null)setGateKeys(false);
