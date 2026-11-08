@@ -925,7 +925,7 @@ public final class GeodeClient {
         }
         if(isContainerGuiOpen(p)){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;
-            closeWindowId=currentContainerWindowId(p);closeAttempts=0;retryTicks=ticks;return;
+            closeWindowId=currentContainerWindowId(p);closeAttempts=0;retryTicks=ticks+3;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
         tickChestOpen(p,bp);
@@ -984,8 +984,8 @@ public final class GeodeClient {
 
         if(invokeVanillaRightClick(hit)){
             openAttempts++;
-            retryTicks=ticks+12;
-            status="Vanilla right-click sent to visible chest face (attempt "+openAttempts+"/3)";
+            retryTicks=ticks+40;
+            status="Vanilla right-click sent; waiting for server window (attempt "+openAttempts+"/3)";
         }else{
             status="Could not invoke Minecraft's vanilla right-click method";
             retryTicks=ticks+20;
@@ -1063,9 +1063,9 @@ public final class GeodeClient {
     }
 
     /**
-     * Close the server's active window and the local GUI independently.
-     * In 1.8.9 closeScreen() can reset the player container while a GuiContainer
-     * screen is still displayed, so both operations are deliberately explicit.
+     * Use the exact vanilla 1.8.9 closeScreen path used by PitAutoEnchanter:
+     * it sends C0D(windowId), clears the carried stack, resets the local container,
+     * and removes the GUI. Retain the window id for bounded packet retries.
      */
     private boolean closeActiveContainer(EntityPlayerSP p){
         if(p==null)return false;
@@ -1075,45 +1075,63 @@ public final class GeodeClient {
         if(!guiOpen&&!containerOpen)return false;
 
         int windowId=currentContainerWindowId(p);
-        if(windowId>0&&p.sendQueue!=null){
+        if(windowId>0)closeWindowId=windowId;
+
+        // This sends the packet for p.openContainer.windowId and clears the local GUI.
+        p.closeScreen();
+
+        // A server/custom GUI may not be represented by the current player container.
+        // Make sure the exact visible GuiContainer is also dismissed locally.
+        if(mc.currentScreen instanceof GuiContainer)mc.displayGuiScreen(null);
+
+        // If the visible screen and player container disagree, send its own id too.
+        if(windowId>0&&p.sendQueue!=null
+                &&(p.openContainer==null||p.openContainer.windowId!=windowId)){
             p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(windowId));
-            closeWindowId=windowId;
         }
-        if(containerOpen)p.closeScreenAndDropStack();
-        if(guiOpen)mc.displayGuiScreen(null);
         return true;
     }
 
     private void lootChest(EntityPlayerSP p){
-        // Do not transfer items. Wait for the GUI to stay closed, retrying if the
-        // server immediately reopens the same container.
-        if(isContainerGuiOpen(p)){
-            if(ticks>=retryTicks){
-                int activeId=currentContainerWindowId(p);
-                if(activeId>0)closeWindowId=activeId;
-                closeActiveContainer(p);
-                closeAttempts++;
-                retryTicks=ticks+4;
-                status="Closing chest GUI (attempt "+closeAttempts+"); no items taken";
-            }
+        // Never touch chest slots. Let the server finish opening the window before
+        // closing it, then retry the original close packet after the local GUI vanishes.
+        if(ticks<retryTicks)return;
+
+        boolean guiOpen=isContainerGuiOpen(p);
+        if(guiOpen){
+            closeActiveContainer(p);
+            closeAttempts++;
+            retryTicks=ticks+4;
+            status="Closing chest GUI via vanilla closeScreen (attempt "+closeAttempts+")";
             return;
         }
-        if(closeAttempts==1&&ticks>=retryTicks){
+
+        if(closeAttempts==0){
+            // The server may have sent the open screen just after our first check.
+            retryTicks=ticks+2;
+            closeAttempts=1;
+            status="Waiting for chest GUI close confirmation";
+            return;
+        }
+
+        if(closeAttempts<3){
             if(closeWindowId>0&&p.sendQueue!=null){
                 p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(closeWindowId));
             }
             closeAttempts++;
             retryTicks=ticks+4;
-            status="Confirming chest window closure";
+            status="Re-sent chest close packet (attempt "+closeAttempts+")";
             return;
         }
-        if(ticks<retryTicks)return;
+
         finish(false);
-        closeWindowId=-1;closeAttempts=0;
+        closeWindowId=-1;
+        closeAttempts=0;
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootEmptyTicks=0;lootTimer.reset();
+        closeWindowId=-1;closeAttempts=0;
         status=emptied?"Chest emptied and GUI closed; searching for next":"Chest GUI closed; searching for next";
     }
     private void tickGateEntry(EntityPlayerSP p){
