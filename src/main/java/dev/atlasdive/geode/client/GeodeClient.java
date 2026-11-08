@@ -23,6 +23,7 @@ import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
+import net.minecraftforge.client.event.GuiOpenEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import org.lwjgl.opengl.GL11;
@@ -66,6 +67,7 @@ public final class GeodeClient {
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
     private int loadedChestTiles,excludedChestTiles,waterRecoveryRadius=8;
     private int closeWindowId=-1,closeAttempts;
+    private boolean chestGuiOpenIntercepted;
     private Stage waterResumeStage=Stage.SEEK;
     private boolean patrolTransit;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
@@ -99,6 +101,16 @@ public final class GeodeClient {
         }
         if(hopPhase!=HopPhase.NONE){tickServerHop(p,w);return;}
         if(ticks<hopRetryAt){movement.stop();return;}
+        if(chestGuiOpenIntercepted&&(stage==Stage.OPEN||stage==Stage.LOOT)){
+            chestGuiOpenIntercepted=false;
+            if(isContainerGuiOpen(p)){
+                closeWindowId=currentContainerWindowId(p);
+                closeActiveContainer(p);
+                stage=Stage.LOOT;closeAttempts=1;retryTicks=ticks+4;
+                status="Chest GUI suppressed; sent close for window "+closeWindowId;
+                return;
+            }
+        }
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
         if(hasOtherListedPlayerInWatchArea(p,w)){
             beginServerHop(p,inSewer);
@@ -126,6 +138,20 @@ public final class GeodeClient {
             case OPEN:movement.stop();openChest(p,w);break;
             case LOOT:lootChest(p);break;
             default:movement.stop();
+        }
+    }
+
+    /**
+     * Intercept the chest screen before it becomes visible. NetHandlerPlayClient
+     * assigns the server's windowId immediately after displayGUIChest() returns;
+     * on the following client tick we close that now-identified container.
+     */
+    @SubscribeEvent public void onGuiOpen(GuiOpenEvent e){
+        if(!running||chest==null||(stage!=Stage.OPEN&&stage!=Stage.LOOT))return;
+        if(e.gui instanceof GuiChest){
+            e.setCanceled(true);
+            chestGuiOpenIntercepted=true;
+            status="Intercepted chest GUI open event";
         }
     }
 
@@ -306,6 +332,7 @@ public final class GeodeClient {
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
         deathRestartPending=false;inSewer=false;movement.stop();
+        chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
@@ -925,7 +952,11 @@ public final class GeodeClient {
         }
         if(isContainerGuiOpen(p)){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;
-            closeWindowId=currentContainerWindowId(p);closeAttempts=0;retryTicks=ticks+3;return;
+            closeWindowId=currentContainerWindowId(p);closeAttempts=0;
+            retryTicks=chestGuiOpenIntercepted?ticks:ticks+3;
+            chestGuiOpenIntercepted=false;
+            status="Chest container opened; closing server window";
+            return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
         tickChestOpen(p,bp);
@@ -1131,7 +1162,7 @@ public final class GeodeClient {
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootEmptyTicks=0;lootTimer.reset();
-        closeWindowId=-1;closeAttempts=0;
+        closeWindowId=-1;closeAttempts=0;chestGuiOpenIntercepted=false;
         status=emptied?"Chest emptied and GUI closed; searching for next":"Chest GUI closed; searching for next";
     }
     private void tickGateEntry(EntityPlayerSP p){
