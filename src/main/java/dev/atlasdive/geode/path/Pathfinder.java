@@ -31,11 +31,15 @@ public final class Pathfinder {
             }
             if(world.climbable(cur.pos)||world.liquid(cur.pos)){
                 MovementKind verticalKind=world.climbable(cur.pos)?MovementKind.CLIMB:MovementKind.SWIM;
-                for(int dyHalf:new int[]{1,2,-1,-2}){
+                for(int dyHalf:new int[]{2,1,-2,-1}){
                     PathNode to=cur.pos.add(0,dyHalf,0);
-                    if(world.canStand(to)&&!world.hazard(to)&&(world.climbable(to)||world.liquid(to)))
-                        relax(to,verticalKind,cur.pos,cur.g+0.8D+Math.max(0.0D,world.extraCost(to)),
+                    if(world.canStand(to)&&!world.hazard(to)&&(world.climbable(to)||world.liquid(to))){
+                        MovementKind kind=world.liquid(to)?MovementKind.SWIM:verticalKind;
+                        double climbCost=verticalKind==MovementKind.CLIMB
+                                ?0.22D+Math.abs(dyHalf)*0.12D:0.8D;
+                        relax(to,kind,cur.pos,cur.g+climbCost+Math.max(0.0D,world.extraCost(to)),
                                 goals,best,parents,open);
+                    }
                 }
             }
             for(int dyHalf=-1;dyHalf>=-maxFall*2;dyHalf--){
@@ -107,7 +111,7 @@ public final class Pathfinder {
         double stepCost=horizontal+lanePenalty;
         if(kind==MovementKind.STEP_UP)stepCost+=vertical*2.4D;
         else if(kind==MovementKind.SWIM)stepCost+=0.6D;
-        else if(kind==MovementKind.CLIMB)stepCost+=1.2D;
+        else if(kind==MovementKind.CLIMB)stepCost+=0.30D;
         relax(next,kind,from,base+stepCost+Math.max(0.0D,world.extraCost(next)),
                 goals,best,parents,open);
     }

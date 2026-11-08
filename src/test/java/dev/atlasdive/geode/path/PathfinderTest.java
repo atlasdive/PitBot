@@ -372,6 +372,76 @@ public class PathfinderTest {
         assertFalse(WaypointGeometry.shouldSprint(1.0D,false));
     }
 
+
+    @Test public void watchAreaIncludesItsConfiguredBounds(){
+        assertTrue(WatchArea.contains(11.0D,58.0D,12.0D));
+        assertTrue(WatchArea.contains(104.99D,61.99D,26.99D));
+        assertFalse(WatchArea.contains(10.99D,60.0D,20.0D));
+        assertFalse(WatchArea.contains(50.0D,62.0D,20.0D));
+        assertFalse(WatchArea.contains(50.0D,60.0D,27.0D));
+    }
+
+    @Test public void deathRecapDetectorAcceptsVariableNamesAndFormatting(){
+        assertTrue(DeathMessageDetector.matches("§cDEATH! by [120] ultralighttx VIEW RECAP"));
+        assertTrue(DeathMessageDetector.matches("DEATH! by AnotherPlayer VIEW RECAP"));
+        assertFalse(DeathMessageDetector.matches("DEATH! by AnotherPlayer"));
+        assertFalse(DeathMessageDetector.matches("VIEW RECAP"));
+    }
+
+    @Test public void chestAimIsCalculatedFromActualPlayerPosition(){
+        float yaw=ChestAimMath.yaw(99.0D,47.5D,99.5D,47.0D);
+        float pitch=ChestAimMath.pitch(99.0D,59.62D,47.5D,99.5D,61.48D,47.0D);
+        assertTrue("aim should point broadly north toward the special chest",yaw<-120.0F&&yaw>-200.0F);
+        assertTrue("aim should look upward toward the elevated chest",pitch<0.0F&&pitch>-80.0F);
+    }
+
+    @Test public void vineFacesMapToSupportedClimbLanes(){
+        int mask=VineTraversal.laneMask(true,false,false,true);
+        assertTrue((mask&(1<<PathNode.SOUTH))!=0);
+        assertTrue((mask&(1<<PathNode.EAST))!=0);
+        assertFalse((mask&(1<<PathNode.WEST))!=0);
+        assertEquals(1<<PathNode.CENTER,VineTraversal.laneMask(false,false,false,false));
+        assertEquals(0.0F,VineTraversal.yawForLane(PathNode.NORTH,45.0F),0.001F);
+        assertEquals(-90.0F,VineTraversal.yawForLane(PathNode.WEST,45.0F),0.001F);
+        assertEquals(-180.0F,VineTraversal.yawForLane(PathNode.SOUTH,45.0F),0.001F);
+        assertEquals(90.0F,VineTraversal.yawForLane(PathNode.EAST,45.0F),0.001F);
+    }
+
+    @Test public void vineClimbPrefersFullBlockVerticalSteps(){
+        VineWorld world=new VineWorld();
+        PathNode start=new PathNode(0,2,0,PathNode.NORTH);
+        PathNode goal=new PathNode(0,6,0,PathNode.NORTH);
+        PathResult result=new Pathfinder().findNodes(world,start,
+                java.util.Collections.singletonList(goal),1000,8);
+        assertTrue(result.found());
+        assertEquals(3,result.steps.size());
+        assertEquals(new PathNode(0,4,0,PathNode.NORTH),result.steps.get(1).node);
+        assertEquals(MovementKind.CLIMB,result.steps.get(1).kind);
+    }
+
+    @Test public void dashJumpsOnlyOnSafeStraightSprintSegments(){
+        assertTrue(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,4.0D,0.0D,true));
+        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,true,true,4.0D,0.0D,true));
+        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.CLIMB,false,true,4.0D,0.0D,true));
+        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,false,4.0D,0.0D,true));
+        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,2.0D,0.0D,true));
+        assertFalse(WaypointGeometry.shouldDashJump(true,MovementKind.WALK,false,true,4.0D,0.0D,false));
+    }
+
+    private static final class VineWorld extends TestWorld {
+        @Override public boolean canStand(PathNode p){
+            return p.x==0&&p.z==0&&p.lane==PathNode.NORTH&&p.y2>=2&&p.y2<=6;
+        }
+        @Override public boolean clear(PathNode p){return true;}
+        @Override public boolean climbable(PathNode p){return p.x==0&&p.z==0&&p.lane==PathNode.NORTH;}
+        @Override public boolean hazard(PathNode p){return false;}
+        @Override public boolean liquid(PathNode p){return false;}
+        @Override public double extraCost(PathNode p){return 0.0D;}
+        @Override public boolean jumpArcClear(PathNode a,PathNode b){return false;}
+        @Override public boolean transitionClear(PathNode a,PathNode b){return true;}
+        @Override public boolean lineClear(PathNode a,PathNode b){return false;}
+    }
+
     private static class TestWorld implements PathWorld {
         final Set<BlockPos> support=new HashSet<BlockPos>();
         final Set<BlockPos> iron=new HashSet<BlockPos>();

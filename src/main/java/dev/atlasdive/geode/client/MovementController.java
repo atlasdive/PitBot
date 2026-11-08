@@ -18,12 +18,14 @@ public final class MovementController {
     private int index,probeTicks,noProgressTicks,trackedIndex=-1;
     private double lastProbeDistance=Double.POSITIVE_INFINITY;
     private boolean stuck;
+    private int dashJumpCooldown=40;
 
     public void setPath(List<PathStep> steps,EntityPlayerSP player){
         path=steps==null?Collections.<PathStep>emptyList():steps;
         index=Math.min(1,Math.max(0,path.size()-1));
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;
         lastProbeDistance=Double.POSITIVE_INFINITY;stuck=false;
+        dashJumpCooldown=Math.max(dashJumpCooldown,40);
         release();
     }
     public boolean hasPath(){return !path.isEmpty();}
@@ -35,6 +37,7 @@ public final class MovementController {
     public void tick(EntityPlayerSP player){
         if(player==null||!hasPath()||complete()){release();return;}
         if(stuck){release();return;}
+        if(dashJumpCooldown>0)dashJumpCooldown--;
         double feet=player.getEntityBoundingBox().minY;
         PathStep step;
         double dx,dz,distance,vertical;
@@ -66,6 +69,7 @@ public final class MovementController {
                 setSprint(false);trackProgress(metric);return;
             }
             if(step.kind==MovementKind.CLIMB&&distance<=0.72D&&Math.abs(vertical)>0.25D){
+                steerForClimb(player,step.node.lane);
                 setForward(true);setJump(false);setSneak(vertical< -0.20D);
                 setSprint(false);trackProgress(metric);return;
             }
@@ -91,16 +95,26 @@ public final class MovementController {
                     sharpTurn=WaypointGeometry.isSharpTurn(previous.targetX,previous.targetZ,
                             step.targetX,step.targetZ,next.targetX,next.targetZ,38.0D);
                 }
-                setSprint(step.kind!=MovementKind.CLIMB&&player.onGround
-                        &&WaypointGeometry.shouldSprint(distance,sharpTurn));
-                boolean jump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
+                boolean sprint=step.kind!=MovementKind.CLIMB&&step.kind!=MovementKind.SWIM
+                        &&player.onGround&&WaypointGeometry.shouldSprint(distance,sharpTurn);
+                setSprint(sprint);
+                boolean stepJump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
                         ||step.kind==MovementKind.JUMP)&&player.onGround&&distance<2.5D;
-                setJump(jump);
+                boolean dashJump=WaypointGeometry.shouldDashJump(sprint,step.kind,sharpTurn,
+                        player.onGround,distance,vertical,dashJumpCooldown==0);
+                if(dashJump)dashJumpCooldown=95;
+                setJump(stepJump||dashJump);
             }
         }else{setForward(false);setJump(false);setSprint(false);}
         setSneak(false);trackProgress(metric);
     }
 
+    private void steerForClimb(EntityPlayerSP player,int lane){
+        float target=VineTraversal.yawForLane(lane,player.rotationYaw);
+        float difference=MathHelper.wrapAngleTo180_float(target-player.rotationYaw);
+        player.rotationYaw+=MathHelper.clamp_float(difference,-10.0F,10.0F);
+        player.rotationYawHead=player.rotationYaw;
+    }
     private void steer(EntityPlayerSP player,double dx,double dz){
         if(Math.sqrt(dx*dx+dz*dz)<0.04D)return;
         float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
@@ -123,6 +137,7 @@ public final class MovementController {
     public void stop(){
         release();path=Collections.emptyList();index=0;stuck=false;
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;lastProbeDistance=Double.POSITIVE_INFINITY;
+        dashJumpCooldown=40;
     }
     private void releaseForwardAndJump(){setForward(false);setJump(false);setSneak(false);setSprint(false);}
     private void setForward(boolean v){key(Minecraft.getMinecraft().gameSettings.keyBindForward,v);}

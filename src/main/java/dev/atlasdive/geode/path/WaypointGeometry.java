@@ -36,4 +36,11 @@ public final class WaypointGeometry {
     public static boolean shouldSprint(double distanceToWaypoint,boolean sharpTurn){
         return distanceToWaypoint>1.35D&&(!sharpTurn||distanceToWaypoint>2.8D);
     }
+
+    /** Short sprint-jumps are reserved for long, level, straight walking segments. */
+    public static boolean shouldDashJump(boolean sprint,MovementKind kind,boolean sharpTurn,
+            boolean onGround,double distance,double vertical,boolean cooldownReady){
+        return sprint&&kind==MovementKind.WALK&&!sharpTurn&&onGround
+                &&distance>3.0D&&Math.abs(vertical)<0.20D&&cooldownReady;
+    }
 }

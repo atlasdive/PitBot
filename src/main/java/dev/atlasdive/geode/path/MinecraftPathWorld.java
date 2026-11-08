@@ -7,6 +7,7 @@ import net.minecraft.block.BlockPane;
 import net.minecraft.block.BlockFence;
 import net.minecraft.block.BlockWall;
 import net.minecraft.block.material.Material;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.init.Blocks;
 import net.minecraft.util.AxisAlignedBB;
@@ -21,13 +22,13 @@ public final class MinecraftPathWorld implements PathWorld {
     private static final double[] OFFSET_X={0.0D,-0.35D,0.35D,0.0D,0.0D};
     private static final double[] OFFSET_Z={0.0D,0.0D,0.0D,-0.35D,0.35D};
     private final int minX,minY,minZ,w,h,d,halfH;
-    private final byte[] flags,clearMasks,standMasks;
+    private final byte[] flags,clearMasks,standMasks,vineMasks;
     private final float[] costs;
 
     private MinecraftPathWorld(int x,int y,int z,int w,int h,int d){
         minX=x;minY=y;minZ=z;this.w=w;this.h=h;this.d=d;halfH=h*2+1;
         int count=w*halfH*d;
-        flags=new byte[count];clearMasks=new byte[count];standMasks=new byte[count];costs=new float[count];
+        flags=new byte[count];clearMasks=new byte[count];standMasks=new byte[count];vineMasks=new byte[count];costs=new float[count];
     }
     public static MinecraftPathWorld capture(World world,EntityPlayerSP player,BlockPos start,List<BlockPos> goals){
         return capture(world,player,PathNode.fromBlockPos(start),toNodes(goals));
@@ -86,7 +87,7 @@ public final class MinecraftPathWorld implements PathWorld {
             double feetY=y2*0.5D;int blockY=(int)Math.floor(feetY);
             net.minecraft.util.BlockPos p=new net.minecraft.util.BlockPos(x,blockY,z);
             if(!world.isBlockLoaded(p,false))continue;
-            Block b=world.getBlockState(p).getBlock();Material m=b.getMaterial();
+            IBlockState state=world.getBlockState(p);Block b=state.getBlock();Material m=b.getMaterial();
             boolean liquid=m==Material.water;
             boolean hazard=m==Material.lava||b==Blocks.lava||b==Blocks.flowing_lava
                     ||b==Blocks.fire||b==Blocks.cactus;
@@ -102,6 +103,11 @@ public final class MinecraftPathWorld implements PathWorld {
                     standMask|=clearMask;
             }
             out.clearMasks[i]=(byte)clearMask;out.standMasks[i]=(byte)standMask;
+            if(b instanceof BlockVine){
+                out.vineMasks[i]=(byte)VineTraversal.laneMask(
+                        state.getValue(BlockVine.NORTH),state.getValue(BlockVine.EAST),
+                        state.getValue(BlockVine.SOUTH),state.getValue(BlockVine.WEST));
+            }
             byte f=0;if(hazard)f|=HAZARD;if(climb)f|=CLIMB;if(liquid)f|=LIQUID;if(gateBarrier)f|=GATE_BARRIER;
             out.flags[i]=f;
             float c=0F;if(b==Blocks.water||b==Blocks.flowing_water)c+=1.0F;
@@ -125,7 +131,11 @@ public final class MinecraftPathWorld implements PathWorld {
         int i=idx(p);if(i<0)return false;
         byte f=flags[i];int bit=1<<p.lane;
         if((clearMasks[i]&bit)==0||(f&HAZARD)!=0)return false;
-        return (standMasks[i]&bit)!=0||(f&LIQUID)!=0||(f&CLIMB)!=0;
+        if((f&CLIMB)!=0){
+            int vineMask=vineMasks[i]&0xFF;
+            return vineMask==0||(vineMask&bit)!=0;
+        }
+        return (standMasks[i]&bit)!=0||(f&LIQUID)!=0;
     }
     public boolean clear(BlockPos p){return clear(PathNode.fromBlockPos(p));}
     public boolean clear(PathNode p){int i=idx(p);return i>=0&&(clearMasks[i]&(1<<p.lane))!=0;}

@@ -6,6 +6,8 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockFalling;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.client.network.NetworkPlayerInfo;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiChest;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
@@ -14,6 +16,7 @@ import net.minecraft.tileentity.TileEntityChest;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
@@ -30,12 +33,18 @@ public final class GeodeClient {
     public static final KeyBinding TOGGLE_KEY=new KeyBinding("Toggle Geode",Keyboard.KEY_G,"Geode");
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
     private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
+    private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
+    private static final BlockPos AIMED_CHEST=new BlockPos(99,61,46);
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
     private Future<PathResult> future;
     private Stage stage=Stage.IDLE;
-    private boolean running,launchDetected;
+    private boolean running,launchDetected,inSewer,deathRestartPending;
+    private HopPhase hopPhase=HopPhase.NONE;
+    private World hopOriginWorld;
+    private int hopTicks,hopAttempts,hopRetryAt,deathWaitTicks,chestAimStableTicks,chestAimMissTicks,chestAimTicks;
+    private String watchPlayerName="";
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
     private final ChestLootTimer lootTimer=new ChestLootTimer();
@@ -65,12 +74,34 @@ public final class GeodeClient {
         while(TOGGLE_KEY.isPressed())toggle();
         if(!running)return;
         EntityPlayerSP p=mc.thePlayer;World w=mc.theWorld;
-        if(p==null||w==null){stop("Disconnected");return;}
-        if(!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
+        if(p==null||w==null){
+            if(hopPhase!=HopPhase.NONE||deathRestartPending){movement.stop();return;}
+            stop("Disconnected");return;
+        }
+        if(hopPhase==HopPhase.NONE&&!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
-        collectResult(p);
+        if(deathRestartPending){
+            movement.stop();
+            deathWaitTicks++;
+            if(!p.isEntityAlive()||p.getHealth()<=0.0F||deathWaitTicks<20){
+                status="Death detected; waiting for respawn ("+deathWaitTicks+" ticks)";
+                return;
+            }
+            deathRestartPending=false;deathWaitTicks=0;inSewer=false;
+            if(hasOtherListedPlayerInWatchArea(p,w))beginServerHop(p,false);
+            else beginSewerRun(p,w);
+            return;
+        }
+        if(hopPhase!=HopPhase.NONE){tickServerHop(p,w);return;}
+        if(ticks<hopRetryAt){movement.stop();return;}
         if(stage==Stage.ENTER_GATE||stage==Stage.WAIT_GATE_LANDING)trackGateCrossing(p);
+        if(hasOtherListedPlayerInWatchArea(p,w)){
+            beginServerHop(p,inSewer);
+            return;
+        }
+        if(stage==Stage.IDLE){beginSewerRun(p,w);return;}
+        collectResult(p);
         switch(stage){
             case TO_LAUNCH:case TO_GATE:case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:tickRoute(p,w);break;
             case BUILD_SCAFFOLD:tickScaffold(p,w);break;
@@ -95,7 +126,16 @@ public final class GeodeClient {
     }
 
     @SubscribeEvent public void onChat(ClientChatReceivedEvent e){
-        if(running&&e.message!=null&&e.message.getUnformattedText().toLowerCase(Locale.ROOT).contains("a new treasure spawned somewhere")){
+        if(!running||e.message==null)return;
+        String message=e.message.getUnformattedText();
+        if(DeathMessageDetector.matches(message)){
+            suspendNavigation(mc.thePlayer);
+            hopPhase=HopPhase.NONE;hopOriginWorld=null;inSewer=false;
+            deathRestartPending=true;deathWaitTicks=0;
+            status="Death recap received; restarting the Sewer entry sequence";
+            return;
+        }
+        if(message.toLowerCase(Locale.ROOT).contains("a new treasure spawned somewhere")){
             scanTicks=GeodeConfig.scanIntervalTicks;status="Treasure message received - scanning loaded chunks";
         }
     }
@@ -149,16 +189,119 @@ public final class GeodeClient {
         if(!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             tell("This host is blocked. Add its exact hostname to config/geode.cfg.");return;
         }
-        running=true;stage=Stage.TO_LAUNCH;launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;
+        running=true;inSewer=false;deathRestartPending=false;hopPhase=HopPhase.NONE;hopRetryAt=0;
+        if(hasOtherListedPlayerInWatchArea(p,mc.theWorld))beginServerHop(p,false);
+        else beginSewerRun(p,mc.theWorld);
+    }
+
+    private void beginSewerRun(EntityPlayerSP p,World w){
+        suspendNavigation(p);
+        inSewer=false;hopRetryAt=0;stage=Stage.TO_LAUNCH;
+        launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
+        cooldown.clear();chest=null;emptyScans=0;patrolLeg=0;patrolFailures=0;retryTicks=ticks;
         waterRecoveryRadius=8;waterResumeStage=Stage.SEEK;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
+        chestAimStableTicks=0;chestAimMissTicks=0;chestAimTicks=0;
         failedGateApproaches.clear();resetGateState();
-        tell("Geode started. Pathfinding to (16, 95, 16).");routeLaunch(p,mc.theWorld);
+        tell("Sewer entry sequence started. Pathfinding to (16, 95, 16).");
+        routeLaunch(p,w);
     }
+
+    private void suspendNavigation(EntityPlayerSP p){
+        movement.stop();
+        if(future!=null)future.cancel(true);
+        future=null;
+        restoreScaffoldState(p);
+        scaffoldPlan=null;scaffoldIndex=0;
+    }
+
+    private boolean hasOtherListedPlayerInWatchArea(EntityPlayerSP self,World world){
+        if(self==null||world==null||mc.getNetHandler()==null)return false;
+        for(Object value:world.playerEntities){
+            if(!(value instanceof EntityPlayer))continue;
+            EntityPlayer other=(EntityPlayer)value;
+            if(other==self)continue;
+            NetworkPlayerInfo info=mc.getNetHandler().getPlayerInfo(other.getUniqueID());
+            if(info==null)continue; // NPCs and most server-side practice bots are not in the tab list.
+            String name=other.getName();
+            String display=info.getDisplayName()==null?"":info.getDisplayName().getUnformattedText();
+            if(isBotIdentity(name)||isBotIdentity(display))continue;
+            if(WatchArea.contains(other.posX,other.getEntityBoundingBox().minY,other.posZ)){
+                watchPlayerName=name==null?"unknown":name;
+                return true;
+            }
+        }
+        watchPlayerName="";
+        return false;
+    }
+
+    private boolean isBotIdentity(String raw){
+        if(raw==null)return false;
+        String lower=raw.toLowerCase(Locale.ROOT).trim();
+        return lower.equals("bot")||lower.startsWith("bot_")||lower.startsWith("bot-")
+                ||lower.endsWith("_bot")||lower.endsWith("-bot")
+                ||lower.startsWith("npc_")||lower.startsWith("npc-")||lower.startsWith("npc ")
+                ||lower.contains("[bot]")||lower.contains("[npc]");
+    }
+
+    private void beginServerHop(EntityPlayerSP p,boolean fromSewer){
+        if(p==null||hopPhase!=HopPhase.NONE)return;
+        suspendNavigation(p);
+        if(mc.currentScreen instanceof GuiChest)p.closeScreen();
+        stage=Stage.IDLE;hopAttempts=0;hopTicks=0;hopRetryAt=0;
+        String who=watchPlayerName.isEmpty()?"another player":watchPlayerName;
+        if(fromSewer){
+            p.sendChatMessage("/spawn");
+            hopPhase=HopPhase.SPAWN_DELAY;
+            status="Player "+who+" entered the Sewer area; returning to spawn";
+        }else{
+            status="Player "+who+" is in the watched area; searching for an empty Pit server";
+            sendPlayPit(p);
+        }
+    }
+
+    private void sendPlayPit(EntityPlayerSP p){
+        p.sendChatMessage("/play pit");
+        hopOriginWorld=mc.theWorld;
+        hopPhase=HopPhase.WAIT_TRANSFER;
+        hopTicks=0;hopAttempts++;
+        status="Requested /play pit (attempt "+hopAttempts+")";
+    }
+
+    private void tickServerHop(EntityPlayerSP p,World w){
+        movement.stop();
+        if(hopPhase==HopPhase.SPAWN_DELAY){
+            if(++hopTicks>=20)sendPlayPit(p);
+            return;
+        }
+        if(hopPhase==HopPhase.WAIT_TRANSFER){
+            if(w!=hopOriginWorld){
+                hopPhase=HopPhase.SETTLE;hopTicks=0;
+                status="New Pit server loaded; rescanning after transfer";
+                return;
+            }
+            if(++hopTicks>=80){
+                if(hopAttempts<3)sendPlayPit(p);
+                else{
+                    hopPhase=HopPhase.NONE;hopOriginWorld=null;hopRetryAt=ticks+40;
+                    status="No server transfer detected; retrying the player scan shortly";
+                }
+            }
+            return;
+        }
+        if(hopPhase==HopPhase.SETTLE){
+            if(++hopTicks>=30){
+                hopPhase=HopPhase.NONE;hopOriginWorld=null;inSewer=false;
+                if(hasOtherListedPlayerInWatchArea(p,w))beginServerHop(p,false);
+                else beginSewerRun(p,w);
+            }
+        }
+    }
+
     private void stop(String why){
-        running=false;stage=Stage.IDLE;status=why;movement.stop();
+        running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
+        deathRestartPending=false;inSewer=false;movement.stop();
         if(future!=null)future.cancel(true);future=null;chest=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
@@ -218,6 +361,7 @@ public final class GeodeClient {
                 routeChest(p,w,chest);
             }else{
                 stage=Stage.OPEN;openAttempts=0;retryTicks=ticks;
+                chestAimStableTicks=0;chestAimMissTicks=0;chestAimTicks=0;
             }
         }
         else if(stage==Stage.PATROL){
@@ -291,6 +435,11 @@ public final class GeodeClient {
                     "chest "+c+" transit");
             return;
         }
+        if(AIMED_CHEST.equals(c)){
+            status="Precise approach to chest "+c+" at (99.0, 58.0, 47.5)";
+            routeExact(p,w,PathNode.atWorld(99.0D,58.0D,47.5D),"chest "+c+" precision approach");
+            return;
+        }
         int approachRadius=c.equals(scaffoldedChest)?4:3;
         route(p,w,ChestApproachPlanner.candidates(c,approachRadius,3),"chest "+c);
     }
@@ -355,12 +504,21 @@ public final class GeodeClient {
     }
 
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why){
+        route(p,w,rough,why,null);
+    }
+
+    private void routeExact(EntityPlayerSP p,World w,PathNode exactGoal,String why){
+        route(p,w,Collections.singletonList(exactGoal.blockPos()),why,Collections.singletonList(exactGoal));
+    }
+
+    private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why,List<PathNode> exactGoals){
         if(future!=null)future.cancel(true);movement.stop();
         BlockPos start=playerPos(p);
         PathNode requestedStart=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
         lastStart=start;
         List<PathNode> captureGoals=new ArrayList<PathNode>();
-        for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
+        if(exactGoals!=null)captureGoals.addAll(exactGoals);
+        else for(BlockPos point:rough)captureGoals.add(PathNode.fromBlockPos(point));
         MinecraftPathWorld snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
         PathNode resolvedStart=requestedStart;
         if(!snap.canStand(resolvedStart)){
@@ -410,6 +568,13 @@ public final class GeodeClient {
             goalCandidates=pathGoals.size();
             gateLanding=null;gateDropSource=null;gateCrossed=false;
             previousGateFeet=Double.NaN;
+        }else if(exactGoals!=null){
+            for(PathNode goal:exactGoals){
+                if(snap.canStand(goal)){
+                    pathGoals.add(goal);
+                    goals.add(goal.blockPos());
+                }
+            }
         }else{
             for(BlockPos g:rough){
                 if("Sewer patrol".equals(why)){
@@ -758,10 +923,90 @@ public final class GeodeClient {
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
+        if(AIMED_CHEST.equals(chest)){
+            tickAimedChestOpen(p,bp);
+            return;
+        }
         if(ticks<retryTicks)return;
         if(openAttempts>=3){cooldown.put(chest,w.getTotalWorldTime()+200L);chest=null;stage=Stage.SEEK;return;}
         openAttempts++;retryTicks=ticks+12;
         mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),bp,EnumFacing.UP,new Vec3(chest.x+.5D,chest.y+.5D,chest.z+.5D));
+    }
+
+    private void tickAimedChestOpen(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
+        chestAimTicks++;
+        if(openAttempts>=3&&ticks>=retryTicks){
+            cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
+            status="Special chest did not open after 3 verified interaction attempts; skipping";
+            chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            return;
+        }
+        if(chestAimTicks>120&&openAttempts==0){
+            cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
+            status="Could not get a clear view of special chest "+chest+"; skipping";
+            chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
+            return;
+        }
+        if(ticks<retryTicks)return;
+        ChestAimTarget target=findChestAim(p,bp);
+        double tx=bp.getX()+0.5D,ty=bp.getY()+0.48D,tz=bp.getZ()+0.998D;
+        float yaw=target==null?ChestAimMath.yaw(p.posX,p.posZ,tx,tz):target.yaw;
+        float pitch=target==null?ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz):target.pitch;
+        float yawDifference=MathHelper.wrapAngleTo180_float(yaw-p.rotationYaw);
+        float pitchDifference=pitch-p.rotationPitch;
+        p.rotationYaw+=MathHelper.clamp_float(yawDifference,-10.0F,10.0F);
+        p.rotationPitch+=MathHelper.clamp_float(pitchDifference,-8.0F,8.0F);
+        p.rotationYawHead=p.rotationYaw;
+        if(Math.abs(yawDifference)<=2.0F&&Math.abs(pitchDifference)<=2.0F){
+            if(++chestAimStableTicks<2)return;
+            MovingObjectPosition hit=p.rayTrace(5.0D,1.0F);
+            if(isTargetChestHit(hit,bp)){
+                retryTicks=ticks+12;
+                boolean sent=mc.playerController.onPlayerRightClick(p,mc.theWorld,p.getHeldItem(),
+                        hit.getBlockPos(),hit.sideHit,hit.hitVec);
+                if(sent){openAttempts++;p.swingItem();}
+                status="Aimed at special chest using a verified line of sight";
+                chestAimStableTicks=0;chestAimMissTicks=0;
+            }else{
+                chestAimStableTicks=0;
+                if(++chestAimMissTicks>=10){
+                    chestAimMissTicks=0;
+                    status="Adjusting chest aim; ray trace has not reached the chest yet";
+                }
+            }
+        }else chestAimStableTicks=0;
+    }
+
+    private ChestAimTarget findChestAim(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
+        float savedYaw=p.rotationYaw,savedPitch=p.rotationPitch;
+        double[] xOffsets={0.50D,0.25D,0.75D};
+        double[] yOffsets={0.48D,0.22D,0.74D};
+        ChestAimTarget found=null;
+        for(double x:xOffsets){
+            for(double y:yOffsets){
+                float yaw=ChestAimMath.yaw(p.posX,p.posZ,bp.getX()+x,bp.getZ()+0.998D);
+                float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,
+                        bp.getX()+x,bp.getY()+y,bp.getZ()+0.998D);
+                p.rotationYaw=yaw;p.rotationPitch=pitch;
+                if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
+                    found=new ChestAimTarget(yaw,pitch);
+                    break;
+                }
+            }
+            if(found!=null)break;
+        }
+        p.rotationYaw=savedYaw;p.rotationPitch=savedPitch;
+        return found;
+    }
+
+    private boolean isTargetChestHit(MovingObjectPosition hit,net.minecraft.util.BlockPos bp){
+        return hit!=null&&hit.typeOfHit==MovingObjectPosition.MovingObjectType.BLOCK
+                &&bp.equals(hit.getBlockPos());
+    }
+
+    private static final class ChestAimTarget{
+        final float yaw,pitch;
+        ChestAimTarget(float yaw,float pitch){this.yaw=yaw;this.pitch=pitch;}
     }
     private void lootChest(EntityPlayerSP p){
         if(!(mc.currentScreen instanceof GuiChest)){
@@ -837,7 +1082,7 @@ public final class GeodeClient {
             boolean centered=Math.abs(p.posX-(gateLanding.x+0.5D))<=0.30D
                     &&Math.abs(p.posZ-(gateLanding.z+0.5D))<=0.30D;
             if(fallingThrough&&centered){
-                gateCrossed=true;
+                gateCrossed=true;inSewer=true;
                 stage=Stage.WAIT_GATE_LANDING;
                 gateEntryTicks=0;
                 setGateKeys(false);
@@ -852,7 +1097,7 @@ public final class GeodeClient {
         gateEntryTicks++;
         if(gateCrossed&&p.onGround&&feet<gatePlaneY-0.25D){
             setGateKeys(false);
-            stage=Stage.SEEK;
+            stage=Stage.SEEK;inSewer=true;
             scanTicks=GeodeConfig.scanIntervalTicks;
             tell("Iron-bar gap crossed. Sewer reached; searching for existing chests.");
             findChest(p,w);
