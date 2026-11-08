@@ -7,6 +7,8 @@ import net.minecraft.block.BlockFalling;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.network.NetworkPlayerInfo;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiChest;
@@ -68,15 +70,15 @@ public final class GeodeClient {
     private final Set<String> failedSewerEntrances=new HashSet<String>();
     private SewerEntrance activeSewerEntrance;
     private int sewerDestinationSearchRadius;
-    private EntityPlayer retaliationTarget;
+    private EntityLivingBase retaliationTarget;
     private World retaliationWorld;
     private int retaliationExpiresTick,retaliationCpsWindowTicks,retaliationCps=17;
     private final Random retaliationRandom=new Random();
     private final CpsAttackClock retaliationAttackClock=new CpsAttackClock(17);
     private final HurtTimeDetector localHurtDetector=new HurtTimeDetector();
     private World swingTrackingWorld;
-    private final Map<UUID,Integer> recentPlayerSwingTicks=new HashMap<UUID,Integer>();
-    private final Map<UUID,Boolean> previousPlayerSwingState=new HashMap<UUID,Boolean>();
+    private final Map<UUID,Integer> recentAttackerSwingTicks=new HashMap<UUID,Integer>();
+    private final Map<UUID,Boolean> previousAttackerSwingState=new HashMap<UUID,Boolean>();
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -96,7 +98,7 @@ public final class GeodeClient {
         EntityPlayerSP p=mc.thePlayer;World w=mc.theWorld;
         if(p==null||w==null){
             localHurtDetector.reset();
-            resetPlayerSwingTracking();
+            resetAttackerSwingTracking();
             if(!running)return;
             if(hopPhase!=HopPhase.NONE||deathRestartPending){movement.stop();return;}
             stop("Disconnected");return;
@@ -106,11 +108,11 @@ public final class GeodeClient {
             return;
         }
         if(swingTrackingWorld!=w){
-            resetPlayerSwingTracking();
+            resetAttackerSwingTracking();
             swingTrackingWorld=w;
             localHurtDetector.reset();
         }
-        updateRecentPlayerSwings(p,w);
+        updateRecentAttackerSwings(p,w);
         boolean damageDetected=localHurtDetector.observe(p.hurtTime);
         if(hopPhase==HopPhase.NONE&&!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
@@ -189,11 +191,11 @@ public final class GeodeClient {
         if(!running||mc.thePlayer==null||mc.theWorld==null
                 ||event.entity!=mc.thePlayer||event.source==null||!isPathfindingStage())return;
         net.minecraft.entity.Entity source=event.source.getEntity();
-        if(!(source instanceof EntityPlayer))source=event.source.getSourceOfDamage();
-        if(source instanceof EntityPlayer)beginRetaliation((EntityPlayer)source);
+        if(!(source instanceof EntityLivingBase))source=event.source.getSourceOfDamage();
+        if(source instanceof EntityLivingBase)beginRetaliation((EntityLivingBase)source);
     }
 
-    private void beginRetaliation(EntityPlayer attacker){
+    private void beginRetaliation(EntityLivingBase attacker){
         if(!running||attacker==null||mc.thePlayer==null||mc.theWorld==null
                 ||!isPathfindingStage()||attacker==mc.thePlayer||attacker.isDead
                 ||!attacker.isEntityAlive()||attacker.worldObj!=mc.theWorld)return;
@@ -208,42 +210,45 @@ public final class GeodeClient {
         status="Hit by "+attacker.getName()+"; retaliating";
     }
 
-    private void updateRecentPlayerSwings(EntityPlayerSP self,World world){
+    private void updateRecentAttackerSwings(EntityPlayerSP self,World world){
         Set<UUID> present=new HashSet<UUID>();
-        for(EntityPlayer other:world.playerEntities){
-            if(other==null||other==self)continue;
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase)||entity==self)continue;
+            EntityLivingBase other=(EntityLivingBase)entity;
             UUID id=other.getUniqueID();
             present.add(id);
             boolean swinging=other.isSwingInProgress;
-            Boolean wasSwinging=previousPlayerSwingState.put(id,swinging);
+            Boolean wasSwinging=previousAttackerSwingState.put(id,swinging);
             if(swinging&&(wasSwinging==null||!wasSwinging.booleanValue())){
-                recentPlayerSwingTicks.put(id,ticks);
+                recentAttackerSwingTicks.put(id,ticks);
             }
         }
-        previousPlayerSwingState.keySet().retainAll(present);
-        Iterator<Map.Entry<UUID,Integer>> it=recentPlayerSwingTicks.entrySet().iterator();
+        previousAttackerSwingState.keySet().retainAll(present);
+        Iterator<Map.Entry<UUID,Integer>> it=recentAttackerSwingTicks.entrySet().iterator();
         while(it.hasNext()){
             Map.Entry<UUID,Integer> entry=it.next();
             if(!present.contains(entry.getKey())||ticks-entry.getValue()>12)it.remove();
         }
     }
 
-    private void resetPlayerSwingTracking(){
+    private void resetAttackerSwingTracking(){
         swingTrackingWorld=null;
-        recentPlayerSwingTicks.clear();
-        previousPlayerSwingState.clear();
+        recentAttackerSwingTicks.clear();
+        previousAttackerSwingState.clear();
     }
 
-    private EntityPlayer findRecentAttacker(EntityPlayerSP self,World world){
-        EntityPlayer best=null;
+    private EntityLivingBase findRecentAttacker(EntityPlayerSP self,World world){
+        EntityLivingBase best=null;
         int bestAge=9;
         float bestDistance=Float.MAX_VALUE;
-        for(EntityPlayer candidate:world.playerEntities){
-            if(candidate==null||candidate==self||candidate.isDead||!candidate.isEntityAlive()
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase))continue;
+            EntityLivingBase candidate=(EntityLivingBase)entity;
+            if(candidate==self||candidate.isDead||!candidate.isEntityAlive()
                     ||candidate.worldObj!=world)continue;
             float distance=self.getDistanceToEntity(candidate);
-            if(distance>7.0F||!isFacingPlayer(candidate,self,85.0F))continue;
-            Integer swingTick=recentPlayerSwingTicks.get(candidate.getUniqueID());
+            if(distance>7.0F||!isFacingTarget(candidate,self,85.0F))continue;
+            Integer swingTick=recentAttackerSwingTicks.get(candidate.getUniqueID());
             if(swingTick==null)continue;
             int age=ticks-swingTick;
             if(age<0||age>8)continue;
@@ -253,15 +258,16 @@ public final class GeodeClient {
         }
         if(best!=null)return best;
 
-        // Fallback for servers that omit swing animations: a nearby player
-        // whose head is turned toward us is the only plausible local candidate.
-        EntityPlayer nearest=null;
+        // Fallback for living entities that do not replicate swing animations.
+        EntityLivingBase nearest=null;
         float nearestDistance=4.25F;
-        for(EntityPlayer candidate:world.playerEntities){
-            if(candidate==null||candidate==self||candidate.isDead||!candidate.isEntityAlive()
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase))continue;
+            EntityLivingBase candidate=(EntityLivingBase)entity;
+            if(candidate==self||candidate.isDead||!candidate.isEntityAlive()
                     ||candidate.worldObj!=world)continue;
             float distance=self.getDistanceToEntity(candidate);
-            if(distance>nearestDistance||!isFacingPlayer(candidate,self,55.0F)
+            if(distance>nearestDistance||!isFacingTarget(candidate,self,55.0F)
                     ||!candidate.canEntityBeSeen(self))continue;
             nearest=candidate;
             nearestDistance=distance;
@@ -269,7 +275,7 @@ public final class GeodeClient {
         return nearest;
     }
 
-    private boolean isFacingPlayer(EntityPlayer viewer,EntityPlayer target,float maxError){
+    private boolean isFacingTarget(EntityLivingBase viewer,EntityLivingBase target,float maxError){
         double dx=target.posX-viewer.posX;
         double dz=target.posZ-viewer.posZ;
         float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
@@ -288,7 +294,7 @@ public final class GeodeClient {
     }
 
     private void tickRetaliation(EntityPlayerSP player,World world){
-        EntityPlayer target=retaliationTarget;
+        EntityLivingBase target=retaliationTarget;
         if(target==null)return;
         if(world==null||world!=retaliationWorld||target.worldObj!=world
                 ||target.isDead||!target.isEntityAlive()
