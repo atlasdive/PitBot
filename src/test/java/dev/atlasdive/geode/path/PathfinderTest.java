@@ -323,7 +323,15 @@ public class PathfinderTest {
         assertTrue("water cells must be valid path nodes",result.found());
         assertTrue("the water segment should be marked for swimming",
                 result.steps.stream().anyMatch(step->step.node.equals(water)&&step.kind==MovementKind.SWIM));
+        assertEquals("the transition from water onto dry shore is also traversed as a swim edge",
+                MovementKind.SWIM,result.steps.get(result.steps.size()-1).kind);
         assertEquals(shore,result.steps.get(result.steps.size()-1).node);
+        assertTrue("a reached swim waypoint must advance to the following dry-ground waypoint",
+                WaypointGeometry.hasReachedWaypoint(0.20D,0.10D,0.52D));
+        assertFalse("a swim waypoint must not advance while still too far away",
+                WaypointGeometry.hasReachedWaypoint(0.80D,0.10D,0.52D));
+        assertFalse("a swim waypoint must not advance while vertically misaligned",
+                WaypointGeometry.hasReachedWaypoint(0.20D,0.50D,0.52D));
     }
 
     @Test public void pathNodeKeepsItsActualHorizontalLane(){

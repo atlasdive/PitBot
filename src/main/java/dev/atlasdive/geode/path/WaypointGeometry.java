@@ -20,6 +20,12 @@ public final class WaypointGeometry {
         return crossTrack<=maxCrossTrack;
     }
 
+    /** True when a waypoint is close enough horizontally and vertically to be considered reached. */
+    public static boolean hasReachedWaypoint(double horizontalDistance,double verticalDifference,
+            double horizontalRadius){
+        return horizontalDistance<=horizontalRadius&&Math.abs(verticalDifference)<0.34D;
+    }
+
     /** A turn is sharp when the incoming and outgoing segment directions diverge. */
     public static boolean isSharpTurn(double previousX,double previousZ,
             double waypointX,double waypointZ,double nextX,double nextZ,double thresholdDegrees){

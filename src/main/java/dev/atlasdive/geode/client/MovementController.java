@@ -57,6 +57,12 @@ public final class MovementController {
                 trackProgress(metric);return;
             }
             if(step.kind==MovementKind.SWIM){
+                // SWIM steps include the transition from water onto shore. Advance when
+                // this waypoint is reached instead of waiting until the stuck timer fires.
+                if(WaypointGeometry.hasReachedWaypoint(distance,vertical,WAYPOINT_RADIUS)){
+                    advance();
+                    continue;
+                }
                 steer(player,dx,dz);
                 float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
                 boolean aligned=distance<=0.08D
