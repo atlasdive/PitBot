@@ -59,12 +59,14 @@ public class PathStartResolverTest {
         @Override public double extraCost(PathNode p){return 0.0D;}
         @Override public boolean climbable(PathNode p){return false;}
         @Override public boolean liquid(PathNode p){return false;}
-        @Override public boolean gateBarrier(PathNode p){return false;}
         @Override public boolean jumpArcClear(PathNode from,PathNode to){return true;}
         @Override public boolean lineClear(PathNode from,PathNode to){return from.y2==to.y2;}
         @Override public boolean canStand(BlockPos p){return false;}
         @Override public boolean clear(BlockPos p){return true;}
         @Override public boolean hazard(BlockPos p){return false;}
+        @Override public boolean climbable(BlockPos p){return false;}
+        @Override public boolean liquid(BlockPos p){return false;}
+        @Override public boolean gateBarrier(BlockPos p){return false;}
         @Override public double extraCost(BlockPos p){return 0.0D;}
         @Override public boolean jumpArcClear(BlockPos from,BlockPos to){return true;}
         @Override public boolean lineClear(BlockPos from,BlockPos to){return from.y==to.y;}
