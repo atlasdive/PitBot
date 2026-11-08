@@ -25,6 +25,7 @@ public class HurtTimeDetectorTest {
         detector.observe(4);
         detector.reset();
         assertFalse(detector.observe(10));
-        assertTrue(detector.observe(9+1));
+        assertFalse(detector.observe(8));
+        assertTrue(detector.observe(10));
     }
 }
