@@ -468,10 +468,11 @@ public final class GeodeClient {
             return;
         }
         if(SpecialChestTarget.matches(c)){
+            List<PathNode> approachGoals=SpecialChestTarget.approachGoals(c);
             double approachFeetY=SpecialChestTarget.approachFeetY(c);
-            status="Precise approach to special chest "+c+" at (99.0, "+approachFeetY+", 47.5)";
-            routeExact(p,w,PathNode.atWorld(99.0D,approachFeetY,47.5D),
-                    "special chest "+c+" precision approach");
+            status="Precise approach to special chest "+c+" near (99.0, "+approachFeetY+", 47.5)";
+            route(p,w,Collections.singletonList(approachGoals.get(0).blockPos()),
+                    "special chest "+c+" precision approach",approachGoals);
             return;
         }
         int approachRadius=c.equals(scaffoldedChest)?4:3;

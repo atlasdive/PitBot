@@ -1,5 +1,8 @@
 package dev.atlasdive.geode.path;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Matching and approach geometry for the elevated Sewer special chest. */
 public final class SpecialChestTarget {
     private static final int X = 99;
@@ -19,5 +22,19 @@ public final class SpecialChestTarget {
     public static double approachFeetY(BlockPos chest) {
         if (!matches(chest)) throw new IllegalArgumentException("not a special chest target");
         return chest.y - 3.0D;
+    }
+
+    /**
+     * The X coordinate of the precision target lies exactly on a block boundary.
+     * Do not let the nearest-lane mapping select a single possibly blocked edge lane:
+     * expose every collision-tested lane in that same approach cell as a valid goal.
+     */
+    public static List<PathNode> approachGoals(BlockPos chest) {
+        PathNode anchor = PathNode.atWorld(99.0D, approachFeetY(chest), 47.5D);
+        List<PathNode> goals = new ArrayList<PathNode>(PathNode.LANE_COUNT);
+        for (int lane = 0; lane < PathNode.LANE_COUNT; lane++) {
+            goals.add(anchor.withLane(lane));
+        }
+        return goals;
     }
 }
