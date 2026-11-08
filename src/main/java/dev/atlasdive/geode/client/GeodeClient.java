@@ -9,8 +9,6 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
-import net.minecraft.inventory.Container;
-import net.minecraft.network.play.client.C0DPacketCloseWindow;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
@@ -1017,19 +1015,12 @@ public final class GeodeClient {
     }
 
     /**
-     * Close both sides of the active container session. EntityPlayerSP.closeScreen()
-     * normally does this too, but explicitly sending the current window id also handles
-     * non-GuiChest container screens.
+     * Mirror PitAutoEnchanter's proven 1.8.9 container-close path:
+     * EntityPlayerSP.closeScreen() owns both the Close Window packet and local GUI cleanup.
      */
     private boolean closeActiveContainer(EntityPlayerSP p){
         if(p==null||!isContainerGuiOpen(p))return false;
-        Container active=p.openContainer;
-        int windowId=active==null?0:active.windowId;
-        if(p.sendQueue!=null){
-            p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(windowId));
-        }
-        // Clear the carried stack, close the local container and remove its screen.
-        p.closeScreenAndDropStack();
+        p.closeScreen();
         return true;
     }
 
