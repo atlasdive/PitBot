@@ -2,7 +2,9 @@ package dev.atlasdive.geode.path;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 
 /** A known transition from the upper Sewer approach to its interior landing point. */
 public final class SewerEntrance {
@@ -31,6 +33,28 @@ public final class SewerEntrance {
 
     public static List<SewerEntrance> all() {
         return ENTRANCES;
+    }
+
+    /**
+     * Returns non-excluded entrances ordered by straight-line 3D distance from the
+     * player's current feet position. Pathfinding is then attempted one entrance
+     * at a time in this order, so an unreachable nearest entrance cannot hide the next.
+     */
+    public static List<SewerEntrance> nearestFirst(final double playerX, final double playerY,
+                                                    final double playerZ, Set<String> excludedIds) {
+        List<SewerEntrance> result = new ArrayList<SewerEntrance>();
+        for (SewerEntrance entrance : ENTRANCES) {
+            if (excludedIds == null || !excludedIds.contains(entrance.id)) result.add(entrance);
+        }
+        Collections.sort(result, new Comparator<SewerEntrance>() {
+            @Override public int compare(SewerEntrance left, SewerEntrance right) {
+                int distance = Double.compare(
+                        left.start.distanceSquared(playerX, playerY, playerZ),
+                        right.start.distanceSquared(playerX, playerY, playerZ));
+                return distance != 0 ? distance : left.id.compareTo(right.id);
+            }
+        });
+        return Collections.unmodifiableList(result);
     }
 
     /** Finds the route selected by A* from the block containing its upper endpoint. */

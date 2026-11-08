@@ -22,6 +22,25 @@ public class SewerEntranceTest {
         assertFalse(second.passesThroughWater());
     }
 
+    @Test public void nearestEntranceIsSelectedFromCurrentPlayerPosition() {
+        List<SewerEntrance> ordered = SewerEntrance.nearestFirst(
+                110.0D, 66.0D, 50.0D, java.util.Collections.<String>emptySet());
+
+        assertEquals(2, ordered.size());
+        assertEquals("entry-2", ordered.get(0).getId());
+        assertEquals("water-entry-1", ordered.get(1).getId());
+    }
+
+    @Test public void failedNearestEntranceIsSkippedForNextNearest() {
+        Set<String> failed = new HashSet<String>();
+        failed.add("entry-2");
+        List<SewerEntrance> ordered = SewerEntrance.nearestFirst(
+                110.0D, 66.0D, 50.0D, failed);
+
+        assertEquals(1, ordered.size());
+        assertEquals("water-entry-1", ordered.get(0).getId());
+    }
+
     @Test public void resolvesAnEntranceFromItsUpperEndpoint() {
         for (SewerEntrance entrance : SewerEntrance.all()) {
             assertSame(entrance, SewerEntrance.byStart(entrance.getStart()));

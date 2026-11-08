@@ -735,17 +735,17 @@ public final class GeodeClient {
     }
     private void routeLaunch(EntityPlayerSP p,World w){route(p,w,box(16,16,94,97,16,16),"LaunchPad");}
     private void routeGate(EntityPlayerSP p,World w){
-        List<BlockPos> available=new ArrayList<BlockPos>();
-        for(SewerEntrance entrance:SewerEntrance.all()){
-            if(!failedSewerEntrances.contains(entrance.getId()))available.add(entrance.getStart());
-        }
+        List<SewerEntrance> available=SewerEntrance.nearestFirst(
+                p.posX,p.getEntityBoundingBox().minY,p.posZ,failedSewerEntrances);
         if(!available.isEmpty()){
-            activeSewerEntrance=null;
+            activeSewerEntrance=available.get(0);
             stage=Stage.TO_SEWER_ENTRY_START;
-            status="Pathfinding to one of "+available.size()+" registered Sewer entrances";
-            route(p,w,available,"Sewer entry start");
+            status="Pathfinding to nearest Sewer entrance "+activeSewerEntrance.getStart()
+                    +" ("+available.size()+" candidates available)";
+            route(p,w,Collections.singletonList(activeSewerEntrance.getStart()),"Sewer entry start");
             return;
         }
+        activeSewerEntrance=null;
         routeLegacyGate(p,w);
     }
 
@@ -1086,8 +1086,7 @@ public final class GeodeClient {
         goalCandidates=pathGoals.size();
         if(pathGoals.isEmpty()){
             if("Sewer entry start".equals(why)){
-                status="No reachable registered Sewer entrance start; trying the original grate";
-                routeLegacyGate(p,w);
+                failSewerEntrance(p,w,"Nearest registered Sewer entrance has no standable approach");
                 return;
             }else if("Sewer entry destination".equals(why)){
                 failSewerEntrance(p,w,"No standable path to the registered Sewer interior");
@@ -1140,9 +1139,9 @@ public final class GeodeClient {
                 if(stage==Stage.TO_SEWER_ENTRY_START){
                     PathStep endpoint=r.steps.get(r.steps.size()-1);
                     activeSewerEntrance=SewerEntrance.byStart(endpoint.pos);
-                    if(activeSewerEntrance==null){
-                        status="Could not identify the selected Sewer entrance; trying the original grate";
-                        routeLegacyGate(p,mc.theWorld);
+                    if(activeSewerEntrance==null
+                            ||!activeSewerEntrance.getStart().equals(endpoint.pos.blockPos())){
+                        failSewerEntrance(p,mc.theWorld,"Could not resolve the selected Sewer entrance endpoint");
                         return;
                     }
                     status="Route to Sewer entrance ready: "+activeSewerEntrance.getStart()
@@ -1175,8 +1174,7 @@ public final class GeodeClient {
             }else if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
                 beginWaterRecovery(p,mc.theWorld);
             }else if(stage==Stage.TO_SEWER_ENTRY_START){
-                status="No path to registered Sewer entrance start ("+r.expanded+" nodes); trying the original grate";
-                routeLegacyGate(p,mc.theWorld);
+                failSewerEntrance(p,mc.theWorld,"No path to nearest Sewer entrance ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
                 failSewerEntrance(p,mc.theWorld,"No route to Sewer interior ("+r.expanded+" nodes)");
             }else if(stage==Stage.PATROL){
