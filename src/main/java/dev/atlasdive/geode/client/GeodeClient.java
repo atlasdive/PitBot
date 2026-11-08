@@ -10,6 +10,7 @@ import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiChest;
+import net.minecraft.network.play.client.C0DPacketCloseWindow;
 import net.minecraft.inventory.ContainerChest;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
@@ -64,6 +65,7 @@ public final class GeodeClient {
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
     private int loadedChestTiles,excludedChestTiles,waterRecoveryRadius=8;
+    private int closeWindowId=-1,closeAttempts;
     private Stage waterResumeStage=Stage.SEEK;
     private boolean patrolTransit;
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
@@ -921,8 +923,9 @@ public final class GeodeClient {
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
             cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
         }
-        if(isChestGuiOpen(p)){
-            stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;return;
+        if(isContainerGuiOpen(p)){
+            stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;
+            closeWindowId=currentContainerWindowId(p);closeAttempts=0;retryTicks=ticks;return;
         }
         if(p.getDistance(chest.x+.5D,chest.y+.5D,chest.z+.5D)>5D){stage=Stage.TO_CHEST;routeChest(p,w,chest);return;}
         tickChestOpen(p,bp);
@@ -1002,10 +1005,18 @@ public final class GeodeClient {
                 {0.25D,0.86D,0.25D},{0.50D,0.86D,0.50D},{0.75D,0.86D,0.75D}
         };
         ChestAimTarget found=null;
+        ChestAimTarget nearestFaceFallback=null;
+        double nearestDistance=Double.POSITIVE_INFINITY;
         for(double[] sample:samples){
             double tx=bp.getX()+sample[0],ty=bp.getY()+sample[1],tz=bp.getZ()+sample[2];
             float yaw=ChestAimMath.yaw(p.posX,p.posZ,tx,tz);
             float pitch=ChestAimMath.pitch(p.posX,p.posY+p.getEyeHeight(),p.posZ,tx,ty,tz);
+            double ddx=tx-p.posX,ddy=ty-(p.posY+p.getEyeHeight()),ddz=tz-p.posZ;
+            double distance=ddx*ddx+ddy*ddy+ddz*ddz;
+            if(distance<nearestDistance){
+                nearestDistance=distance;
+                nearestFaceFallback=new ChestAimTarget(yaw,pitch);
+            }
             p.rotationYaw=yaw;p.rotationPitch=pitch;
             if(isTargetChestHit(p.rayTrace(5.0D,1.0F),bp)){
                 found=new ChestAimTarget(yaw,pitch);
@@ -1013,37 +1024,18 @@ public final class GeodeClient {
             }
         }
         p.rotationYaw=savedYaw;p.rotationPitch=savedPitch;
-        return found;
+        // A blocked ray must not prevent aiming. The final ray check below still
+        // prevents interaction until the crosshair actually hits this chest.
+        return found!=null?found:nearestFaceFallback;
     }
 
     private boolean invokeVanillaRightClick(MovingObjectPosition hit){
-        if(hit==null||hit.typeOfHit!=MovingObjectPosition.MovingObjectType.BLOCK)return false;
-        // Match PitAutoEnchanter: feed the verified crosshair hit into Minecraft's own
-        // right-click handler instead of constructing an approximate block interaction.
-        mc.objectMouseOver=hit;
-        try{
-            java.lang.reflect.Field delay=null;
-            for(String name:new String[]{"rightClickDelayTimer","field_71467_ac"}){
-                try{delay=mc.getClass().getDeclaredField(name);break;}
-                catch(NoSuchFieldException ignored){}
-            }
-            if(delay==null)return false;
-            delay.setAccessible(true);
-            delay.setInt(mc,0);
-
-            java.lang.reflect.Method click=null;
-            for(String name:new String[]{"rightClickMouse","func_147121_ag"}){
-                try{click=mc.getClass().getDeclaredMethod(name);break;}
-                catch(NoSuchMethodException ignored){}
-            }
-            if(click==null)return false;
-            click.setAccessible(true);
-            click.invoke(mc);
-            return true;
-        }catch(Throwable failure){
-            status="Vanilla right-click failed: "+failure.getClass().getSimpleName();
-            return false;
-        }
+        if(hit==null||hit.typeOfHit!=MovingObjectPosition.MovingObjectType.BLOCK
+                ||mc.thePlayer==null||mc.theWorld==null||mc.playerController==null)return false;
+        boolean sent=mc.playerController.onPlayerRightClick(mc.thePlayer,mc.theWorld,
+                mc.thePlayer.getHeldItem(),hit.getBlockPos(),hit.sideHit,hit.hitVec);
+        if(sent)mc.thePlayer.swingItem();
+        return sent;
     }
 
     private boolean isTargetChestHit(MovingObjectPosition hit,net.minecraft.util.BlockPos bp){
@@ -1061,29 +1053,63 @@ public final class GeodeClient {
                 &&p.openContainer!=p.inventoryContainer);
     }
 
-    private boolean isChestGuiOpen(EntityPlayerSP p){
-        return mc.currentScreen instanceof GuiChest
-                ||(p!=null&&p.openContainer instanceof ContainerChest
-                &&p.openContainer!=p.inventoryContainer);
+    private int currentContainerWindowId(EntityPlayerSP p){
+        if(p!=null&&p.openContainer!=null&&p.inventoryContainer!=null
+                &&p.openContainer!=p.inventoryContainer)return p.openContainer.windowId;
+        if(mc.currentScreen instanceof GuiContainer){
+            return ((GuiContainer)mc.currentScreen).inventorySlots.windowId;
+        }
+        return closeWindowId;
     }
 
     /**
-     * Mirror PitAutoEnchanter's proven 1.8.9 container-close path:
-     * EntityPlayerSP.closeScreen() owns both the Close Window packet and local GUI cleanup.
+     * Close the server's active window and the local GUI independently.
+     * In 1.8.9 closeScreen() can reset the player container while a GuiContainer
+     * screen is still displayed, so both operations are deliberately explicit.
      */
     private boolean closeActiveContainer(EntityPlayerSP p){
-        if(p==null||!isContainerGuiOpen(p))return false;
-        p.closeScreen();
+        if(p==null)return false;
+        boolean guiOpen=mc.currentScreen instanceof GuiContainer;
+        boolean containerOpen=p.openContainer!=null&&p.inventoryContainer!=null
+                &&p.openContainer!=p.inventoryContainer;
+        if(!guiOpen&&!containerOpen)return false;
+
+        int windowId=currentContainerWindowId(p);
+        if(windowId>0&&p.sendQueue!=null){
+            p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(windowId));
+            closeWindowId=windowId;
+        }
+        if(containerOpen)p.closeScreenAndDropStack();
+        if(guiOpen)mc.displayGuiScreen(null);
         return true;
     }
 
     private void lootChest(EntityPlayerSP p){
-        // Never click or transfer chest contents; close as soon as a container GUI appears.
-        boolean closed=closeActiveContainer(p);
+        // Do not transfer items. Wait for the GUI to stay closed, retrying if the
+        // server immediately reopens the same container.
+        if(isContainerGuiOpen(p)){
+            if(ticks>=retryTicks){
+                int activeId=currentContainerWindowId(p);
+                if(activeId>0)closeWindowId=activeId;
+                closeActiveContainer(p);
+                closeAttempts++;
+                retryTicks=ticks+4;
+                status="Closing chest GUI (attempt "+closeAttempts+"); no items taken";
+            }
+            return;
+        }
+        if(closeAttempts==1&&ticks>=retryTicks){
+            if(closeWindowId>0&&p.sendQueue!=null){
+                p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(closeWindowId));
+            }
+            closeAttempts++;
+            retryTicks=ticks+4;
+            status="Confirming chest window closure";
+            return;
+        }
+        if(ticks<retryTicks)return;
         finish(false);
-        status=closed
-                ?"Chest GUI close packet sent; no items taken"
-                :"Chest GUI was already closed; searching for next";
+        closeWindowId=-1;closeAttempts=0;
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
