@@ -25,6 +25,14 @@ public final class MovementController {
     public void setPath(List<PathStep> steps,EntityPlayerSP player,boolean waitForGroundAtEnd){
         path=steps==null?Collections.<PathStep>emptyList():steps;
         index=Math.min(1,Math.max(0,path.size()-1));
+        // Do not skip the starting waypoint when a route begins on a stair/slab
+        // and the player is still standing near its edge rather than its centre.
+        if(path.size()>1&&path.get(0).centerOnly&&player!=null){
+            PathStep start=path.get(0);
+            double dx=start.targetX-player.posX,dz=start.targetZ-player.posZ;
+            double dy=start.feetY-player.getEntityBoundingBox().minY;
+            if(dx*dx+dz*dz>0.16D*0.16D||Math.abs(dy)>0.34D)index=0;
+        }
         probeTicks=0;noProgressTicks=0;trackedIndex=-1;
         lastProbeDistance=Double.POSITIVE_INFINITY;stuck=false;
         this.waitForGroundAtEnd=waitForGroundAtEnd;
