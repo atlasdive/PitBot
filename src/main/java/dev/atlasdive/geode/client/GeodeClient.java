@@ -10,7 +10,6 @@ import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiChest;
-import net.minecraft.network.play.client.C0DPacketCloseWindow;
 import net.minecraft.inventory.ContainerChest;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.item.ItemBlock;
@@ -1102,62 +1101,46 @@ public final class GeodeClient {
         if(p==null)return false;
         boolean guiOpen=mc.currentScreen instanceof GuiContainer;
         boolean containerOpen=p.openContainer!=null&&p.inventoryContainer!=null
-                &&p.openContainer!=p.inventoryContainer;
+                &&p.openContainer!=p.inventoryContainer&&p.openContainer.windowId>0;
         if(!guiOpen&&!containerOpen)return false;
 
-        int windowId=currentContainerWindowId(p);
-        if(windowId>0)closeWindowId=windowId;
-
-        // This sends the packet for p.openContainer.windowId and clears the local GUI.
-        p.closeScreen();
-
-        // A server/custom GUI may not be represented by the current player container.
-        // Make sure the exact visible GuiContainer is also dismissed locally.
-        if(mc.currentScreen instanceof GuiContainer)mc.displayGuiScreen(null);
-
-        // If the visible screen and player container disagree, send its own id too.
-        if(windowId>0&&p.sendQueue!=null
-                &&(p.openContainer==null||p.openContainer.windowId!=windowId)){
-            p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(windowId));
+        if(containerOpen){
+            closeWindowId=p.openContainer.windowId;
+            // IMPORTANT: closeScreen() sends exactly one C0D packet and resets the local
+            // player container. 1.8.9's server processCloseWindow closes its current
+            // container without validating the packet window id, so never send a duplicate.
+            p.closeScreen();
+        }else if(guiOpen){
+            // No active server window exists; remove only the orphaned local screen.
+            mc.displayGuiScreen(null);
         }
         return true;
     }
 
     private void lootChest(EntityPlayerSP p){
-        // Never touch chest slots. Let the server finish opening the window before
-        // closing it, then retry the original close packet after the local GUI vanishes.
+        // One server close request per opened window. Never replay a stale C0D:
+        // the 1.8.9 server handler closes its current container regardless of id.
         if(ticks<retryTicks)return;
 
-        boolean guiOpen=isContainerGuiOpen(p);
-        if(guiOpen){
-            closeActiveContainer(p);
-            closeAttempts++;
-            retryTicks=ticks+4;
-            status="Closing chest GUI via vanilla closeScreen (attempt "+closeAttempts+")";
-            return;
-        }
-
-        if(closeAttempts==0){
-            // The server may have sent the open screen just after our first check.
-            retryTicks=ticks+2;
-            closeAttempts=1;
-            status="Waiting for chest GUI close confirmation";
-            return;
-        }
-
-        if(closeAttempts<3){
-            if(closeWindowId>0&&p.sendQueue!=null){
-                p.sendQueue.addToSendQueue(new C0DPacketCloseWindow(closeWindowId));
+        if(isContainerGuiOpen(p)){
+            int activeId=currentContainerWindowId(p);
+            if(activeId>0&&activeId!=closeWindowId){
+                closeActiveContainer(p);
+                closeAttempts++;
+                retryTicks=ticks+4;
+                status="Closed newly opened chest window "+activeId+" (single request)";
+            }else{
+                // A window id already received its one close request. Do not send it again.
+                status="Waiting for chest container to close; no duplicate packet sent";
+                retryTicks=ticks+10;
             }
-            closeAttempts++;
-            retryTicks=ticks+4;
-            status="Re-sent chest close packet (attempt "+closeAttempts+")";
             return;
         }
 
         finish(false);
         closeWindowId=-1;
         closeAttempts=0;
+        chestGuiOpenIntercepted=false;
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
