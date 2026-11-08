@@ -171,8 +171,7 @@ public final class GeodeClient {
         if(!(source instanceof EntityPlayer))source=event.source.getSourceOfDamage();
         if(!(source instanceof EntityPlayer))return;
         EntityPlayer attacker=(EntityPlayer)source;
-        if(attacker==mc.thePlayer||attacker.isDead||attacker.worldObj!=mc.theWorld
-                ||isBotIdentity(attacker.getName()))return;
+        if(attacker==mc.thePlayer||attacker.isDead||attacker.worldObj!=mc.theWorld)return;
 
         retaliationTarget=attacker;
         retaliationWorld=mc.theWorld;
