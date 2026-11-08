@@ -12,8 +12,10 @@ import java.util.List;
 public final class MovementController {
     private static final double WAYPOINT_RADIUS=0.52D;
     private static final double DROP_ALIGNMENT=0.16D;
-    private static final float TURN_RATE=8.0F;
-    private static final float WALK_ALIGNMENT=58.0F;
+    private static final float TURN_RATE=5.0F;
+    private static final float WALK_ALIGNMENT=12.0F;
+    private static final float SPRINT_ALIGNMENT=4.0F;
+    private static final float SWIM_ALIGNMENT=18.0F;
     private List<PathStep> path=Collections.emptyList();
     private int index,probeTicks,noProgressTicks,trackedIndex=-1;
     private double lastProbeDistance=Double.POSITIVE_INFINITY;
@@ -79,7 +81,7 @@ public final class MovementController {
                 steer(player,dx,dz);
                 float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
                 boolean aligned=distance<=0.08D
-                        ||Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw))<=95.0F;
+                        ||Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw))<=SWIM_ALIGNMENT;
                 setForward(distance>0.08D&&aligned);
                 setJump(vertical>0.12D);setSneak(vertical< -0.12D);
                 setSprint(false);trackProgress(metric);return;
@@ -108,8 +110,10 @@ public final class MovementController {
         if(distance>0.06D){
             float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
             float difference=MathHelper.wrapAngleTo180_float(targetYaw-player.rotationYaw);
-            player.rotationYaw+=MathHelper.clamp_float(difference,-TURN_RATE,TURN_RATE);
-            if(Math.abs(difference)>WALK_ALIGNMENT){
+            float angleError=Math.abs(difference);
+            float turnRate=angleError>45.0F?TURN_RATE:angleError>18.0F?3.5F:2.0F;
+            player.rotationYaw+=MathHelper.clamp_float(difference,-turnRate,turnRate);
+            if(angleError>WALK_ALIGNMENT){
                 setForward(false);setJump(false);setSprint(false);
             }else{
                 setForward(true);
@@ -119,7 +123,8 @@ public final class MovementController {
                     sharpTurn=WaypointGeometry.isSharpTurn(previous.targetX,previous.targetZ,
                             step.targetX,step.targetZ,next.targetX,next.targetZ,38.0D);
                 }
-                boolean sprint=step.kind!=MovementKind.CLIMB&&step.kind!=MovementKind.SWIM
+                boolean sprint=angleError<=SPRINT_ALIGNMENT
+                        &&step.kind!=MovementKind.CLIMB&&step.kind!=MovementKind.SWIM
                         &&player.onGround&&WaypointGeometry.shouldSprint(distance,sharpTurn);
                 setSprint(sprint);
                 boolean stepJump=((step.kind==MovementKind.STEP_UP&&vertical>0.65D)
@@ -133,7 +138,7 @@ public final class MovementController {
     private void steerForClimb(EntityPlayerSP player,int lane){
         float target=VineTraversal.yawForLane(lane,player.rotationYaw);
         float difference=MathHelper.wrapAngleTo180_float(target-player.rotationYaw);
-        player.rotationYaw+=MathHelper.clamp_float(difference,-10.0F,10.0F);
+        player.rotationYaw+=MathHelper.clamp_float(difference,-5.0F,5.0F);
         player.rotationYawHead=player.rotationYaw;
     }
     private void steer(EntityPlayerSP player,double dx,double dz){

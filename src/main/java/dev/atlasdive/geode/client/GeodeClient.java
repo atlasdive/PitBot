@@ -1092,8 +1092,10 @@ public final class GeodeClient {
         }
         float yawDifference=MathHelper.wrapAngleTo180_float(target.yaw-p.rotationYaw);
         float pitchDifference=target.pitch-p.rotationPitch;
-        p.rotationYaw+=MathHelper.clamp_float(yawDifference,-10.0F,10.0F);
-        p.rotationPitch+=MathHelper.clamp_float(pitchDifference,-8.0F,8.0F);
+        // Smaller, bounded aim steps prevent the crosshair from sweeping past a
+        // narrow chest face and repeatedly selecting a different face sample.
+        p.rotationYaw+=MathHelper.clamp_float(yawDifference,-5.0F,5.0F);
+        p.rotationPitch+=MathHelper.clamp_float(pitchDifference,-4.0F,4.0F);
         p.rotationYawHead=p.rotationYaw;
         if(Math.abs(yawDifference)>2.0F||Math.abs(pitchDifference)>2.0F){
             chestAimStableTicks=0;
@@ -1279,8 +1281,8 @@ public final class GeodeClient {
 
         float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
         float difference=MathHelper.wrapAngleTo180_float(targetYaw-p.rotationYaw);
-        p.rotationYaw+=MathHelper.clamp_float(difference,-10.0F,10.0F);
-        if(Math.abs(difference)>28.0F){
+        p.rotationYaw+=MathHelper.clamp_float(difference,-5.0F,5.0F);
+        if(Math.abs(difference)>12.0F){
             setGateKeys(false);
         }else{
             KeyBinding.setKeyBindState(mc.gameSettings.keyBindForward.getKeyCode(),true);
