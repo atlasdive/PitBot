@@ -73,6 +73,10 @@ public final class GeodeClient {
     private int retaliationExpiresTick,retaliationCpsWindowTicks,retaliationCps=17;
     private final Random retaliationRandom=new Random();
     private final CpsAttackClock retaliationAttackClock=new CpsAttackClock(17);
+    private final HurtTimeDetector localHurtDetector=new HurtTimeDetector();
+    private World swingTrackingWorld;
+    private final Map<UUID,Integer> recentPlayerSwingTicks=new HashMap<UUID,Integer>();
+    private final Map<UUID,Boolean> previousPlayerSwingState=new HashMap<UUID,Boolean>();
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
             patrolLeg,patrolFailures,expandedNodes,goalCandidates,gateEntryTicks,patrolScanTicks;
@@ -89,12 +93,25 @@ public final class GeodeClient {
         if(e.phase!=TickEvent.Phase.END)return;
         ticks++;
         while(TOGGLE_KEY.isPressed())toggle();
-        if(!running)return;
         EntityPlayerSP p=mc.thePlayer;World w=mc.theWorld;
         if(p==null||w==null){
+            localHurtDetector.reset();
+            resetPlayerSwingTracking();
+            if(!running)return;
             if(hopPhase!=HopPhase.NONE||deathRestartPending){movement.stop();return;}
             stop("Disconnected");return;
         }
+        if(!running){
+            localHurtDetector.observe(p.hurtTime);
+            return;
+        }
+        if(swingTrackingWorld!=w){
+            resetPlayerSwingTracking();
+            swingTrackingWorld=w;
+            localHurtDetector.reset();
+        }
+        updateRecentPlayerSwings(p,w);
+        boolean damageDetected=localHurtDetector.observe(p.hurtTime);
         if(hopPhase==HopPhase.NONE&&!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
@@ -111,6 +128,11 @@ public final class GeodeClient {
             return;
         }
         if(hopPhase!=HopPhase.NONE){tickServerHop(p,w);return;}
+        if(damageDetected&&retaliationTarget==null&&isPathfindingStage()){
+            EntityPlayer attacker=findRecentAttacker(p,w);
+            if(attacker!=null)beginRetaliation(attacker);
+            else status="Hit detected; attacker not identified nearby";
+        }
         if(ticks<hopRetryAt){movement.stop();return;}
         if(chestGuiOpenIntercepted&&(stage==Stage.OPEN||stage==Stage.LOOT)){
             chestGuiOpenIntercepted=false;
@@ -159,20 +181,22 @@ public final class GeodeClient {
     }
 
     /**
-     * Only react to a real player who damaged the local player while Geode was
-     * actively following or computing a navigation path. Environmental damage
-     * and hits outside a pathfinding stage never initiate combat.
+     * Forge's client-side player hurt animation is observed through hurtTime;
+     * LivingHurtEvent is retained as a fallback for client-side damage sources
+     * that do execute the normal Forge damage hook.
      */
     @SubscribeEvent public void onLivingHurt(LivingHurtEvent event){
         if(!running||mc.thePlayer==null||mc.theWorld==null
-                ||event.entity!=mc.thePlayer||event.source==null)return;
-        if(!isPathfindingStage())return;
+                ||event.entity!=mc.thePlayer||event.source==null||!isPathfindingStage())return;
         net.minecraft.entity.Entity source=event.source.getEntity();
         if(!(source instanceof EntityPlayer))source=event.source.getSourceOfDamage();
-        if(!(source instanceof EntityPlayer))return;
-        EntityPlayer attacker=(EntityPlayer)source;
-        if(attacker==mc.thePlayer||attacker.isDead||attacker.worldObj!=mc.theWorld)return;
+        if(source instanceof EntityPlayer)beginRetaliation((EntityPlayer)source);
+    }
 
+    private void beginRetaliation(EntityPlayer attacker){
+        if(!running||attacker==null||mc.thePlayer==null||mc.theWorld==null
+                ||!isPathfindingStage()||attacker==mc.thePlayer||attacker.isDead
+                ||!attacker.isEntityAlive()||attacker.worldObj!=mc.theWorld)return;
         retaliationTarget=attacker;
         retaliationWorld=mc.theWorld;
         retaliationExpiresTick=ticks+100;
@@ -182,6 +206,75 @@ public final class GeodeClient {
         retaliationAttackClock.reset();
         movement.pause();
         status="Hit by "+attacker.getName()+"; retaliating";
+    }
+
+    private void updateRecentPlayerSwings(EntityPlayerSP self,World world){
+        Set<UUID> present=new HashSet<UUID>();
+        for(EntityPlayer other:world.playerEntities){
+            if(other==null||other==self)continue;
+            UUID id=other.getUniqueID();
+            present.add(id);
+            boolean swinging=other.isSwingInProgress;
+            Boolean wasSwinging=previousPlayerSwingState.put(id,swinging);
+            if(swinging&&(wasSwinging==null||!wasSwinging.booleanValue())){
+                recentPlayerSwingTicks.put(id,ticks);
+            }
+        }
+        previousPlayerSwingState.keySet().retainAll(present);
+        Iterator<Map.Entry<UUID,Integer>> it=recentPlayerSwingTicks.entrySet().iterator();
+        while(it.hasNext()){
+            Map.Entry<UUID,Integer> entry=it.next();
+            if(!present.contains(entry.getKey())||ticks-entry.getValue()>12)it.remove();
+        }
+    }
+
+    private void resetPlayerSwingTracking(){
+        swingTrackingWorld=null;
+        recentPlayerSwingTicks.clear();
+        previousPlayerSwingState.clear();
+    }
+
+    private EntityPlayer findRecentAttacker(EntityPlayerSP self,World world){
+        EntityPlayer best=null;
+        int bestAge=9;
+        float bestDistance=Float.MAX_VALUE;
+        for(EntityPlayer candidate:world.playerEntities){
+            if(candidate==null||candidate==self||candidate.isDead||!candidate.isEntityAlive()
+                    ||candidate.worldObj!=world)continue;
+            float distance=self.getDistanceToEntity(candidate);
+            if(distance>7.0F||!isFacingPlayer(candidate,self,85.0F))continue;
+            Integer swingTick=recentPlayerSwingTicks.get(candidate.getUniqueID());
+            if(swingTick==null)continue;
+            int age=ticks-swingTick;
+            if(age<0||age>8)continue;
+            if(age<bestAge||(age==bestAge&&distance<bestDistance)){
+                best=candidate;bestAge=age;bestDistance=distance;
+            }
+        }
+        if(best!=null)return best;
+
+        // Fallback for servers that omit swing animations: a nearby player
+        // whose head is turned toward us is the only plausible local candidate.
+        EntityPlayer nearest=null;
+        float nearestDistance=4.25F;
+        for(EntityPlayer candidate:world.playerEntities){
+            if(candidate==null||candidate==self||candidate.isDead||!candidate.isEntityAlive()
+                    ||candidate.worldObj!=world)continue;
+            float distance=self.getDistanceToEntity(candidate);
+            if(distance>nearestDistance||!isFacingPlayer(candidate,self,55.0F)
+                    ||!candidate.canEntityBeSeen(self))continue;
+            nearest=candidate;
+            nearestDistance=distance;
+        }
+        return nearest;
+    }
+
+    private boolean isFacingPlayer(EntityPlayer viewer,EntityPlayer target,float maxError){
+        double dx=target.posX-viewer.posX;
+        double dz=target.posZ-viewer.posZ;
+        float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+        float error=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-viewer.rotationYawHead));
+        return error<=maxError;
     }
 
     private boolean isPathfindingStage(){
@@ -235,10 +328,11 @@ public final class GeodeClient {
             retaliationAttackClock.setCps(retaliationCps);
         }
 
-        boolean crosshairTarget=mc.objectMouseOver!=null
-                &&mc.objectMouseOver.typeOfHit==MovingObjectPosition.MovingObjectType.ENTITY
-                &&mc.objectMouseOver.entityHit==target;
-        boolean attackReady=visible&&distance<=3.0F&&crosshairTarget&&mc.currentScreen==null;
+        float pitchError=Math.abs(targetPitch-player.rotationPitch);
+        boolean aimReady=yawError<=8.0F&&pitchError<=8.0F;
+        // attackEntity() already receives the selected entity directly; requiring
+        // objectMouseOver to match can prevent attacks even after the rotation aligns.
+        boolean attackReady=visible&&distance<=3.0F&&aimReady&&mc.currentScreen==null;
         if(retaliationAttackClock.tick(attackReady)){
             // Match vanilla 1.8.9 clickMouse(): swing first (C0A), then
             // attackEntity() syncs the held slot if needed (C09) and sends ATTACK (C02).
