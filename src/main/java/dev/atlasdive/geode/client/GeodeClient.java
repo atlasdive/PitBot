@@ -37,7 +37,6 @@ public final class GeodeClient {
     private static final BlockPos LAUNCH=new BlockPos(16,95,16), GATE=new BlockPos(47,66,75);
     private enum Stage { IDLE,TO_LAUNCH,WAIT_LAUNCH,TO_GATE,ENTER_GATE,WAIT_GATE_LANDING,SEEK,PATROL,TO_CHEST,TO_SCAFFOLD,BUILD_SCAFFOLD,OPEN,LOOT,WATER_RECOVERY }
     private enum HopPhase { NONE, SPAWN_DELAY, WAIT_TRANSFER, SETTLE }
-    private static final BlockPos AIMED_CHEST=new BlockPos(99,61,46);
     private final Minecraft mc=Minecraft.getMinecraft();
     private final MovementController movement=new MovementController();
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"Geode-AStar");t.setDaemon(true);return t;});
@@ -468,9 +467,11 @@ public final class GeodeClient {
                     "chest "+c+" transit");
             return;
         }
-        if(AIMED_CHEST.equals(c)){
-            status="Precise approach to chest "+c+" at (99.0, 58.0, 47.5)";
-            routeExact(p,w,PathNode.atWorld(99.0D,58.0D,47.5D),"chest "+c+" precision approach");
+        if(SpecialChestTarget.matches(c)){
+            double approachFeetY=SpecialChestTarget.approachFeetY(c);
+            status="Precise approach to special chest "+c+" at (99.0, "+approachFeetY+", 47.5)";
+            routeExact(p,w,PathNode.atWorld(99.0D,approachFeetY,47.5D),
+                    "special chest "+c+" precision approach");
             return;
         }
         int approachRadius=c.equals(scaffoldedChest)?4:3;
@@ -936,6 +937,9 @@ public final class GeodeClient {
             BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
             Long until=cooldown.get(candidate);
             if(until!=null&&until>now)continue;
+            // The special chest is the explicit target for this route. Prefer it over
+            // unrelated nearby chests, while still respecting its normal retry cooldown.
+            if(SpecialChestTarget.matches(candidate))return candidate;
             double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
             if(distance<bestDistance){bestDistance=distance;best=candidate;}
         }
