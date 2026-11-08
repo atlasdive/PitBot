@@ -35,10 +35,38 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 \
-            https://services.gradle.org/distributions/gradle-2.14.1-bin.zip \
-            --output "$RUNNER_TEMP/gradle-2.14.1-bin.zip"
-          unzip -q "$RUNNER_TEMP/gradle-2.14.1-bin.zip" -d "$RUNNER_TEMP"
+          archive="$RUNNER_TEMP/gradle-2.14.1-bin.zip"
+          expected_sha256="cfc61eda71f2d12a572822644ce13d2919407595c2aec3e3566d2aab6f97ef39"
+          downloaded=false
+
+          # Use Gradle's direct distribution host first. The services.gradle.org
+          # redirect endpoint has intermittently returned HTTP 504 in Actions.
+          for url in \
+            "https://downloads.gradle.org/distributions/gradle-2.14.1-bin.zip" \
+            "https://services.gradle.org/distributions/gradle-2.14.1-bin.zip"; do
+            rm -f "$archive"
+            if curl --fail --location --retry 2 --retry-all-errors --connect-timeout 20 \
+                "$url" --output "$archive"; then
+              actual_sha256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+              if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+                echo "Gradle distribution checksum mismatch from $url" >&2
+                echo "Expected: $expected_sha256" >&2
+                echo "Actual:   $actual_sha256" >&2
+                exit 1
+              fi
+              downloaded=true
+              echo "Downloaded and checksum-verified Gradle 2.14.1 from $url"
+              break
+            fi
+            echo "Download failed from $url; trying the next official host" >&2
+          done
+
+          if [[ "$downloaded" != "true" ]]; then
+            echo "Could not download Gradle 2.14.1 from either official host" >&2
+            exit 1
+          fi
+
+          unzip -q "$archive" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-2.14.1/bin" >> "$GITHUB_PATH"
 
       - name: Verify toolchain
