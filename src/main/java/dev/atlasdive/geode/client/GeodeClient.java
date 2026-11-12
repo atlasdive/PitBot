@@ -199,6 +199,12 @@ public final class GeodeClient {
         if(!running||attacker==null||mc.thePlayer==null||mc.theWorld==null
                 ||!isPathfindingStage()||attacker==mc.thePlayer||attacker.isDead
                 ||!attacker.isEntityAlive()||attacker.worldObj!=mc.theWorld)return;
+        if(retaliationTarget==attacker&&retaliationWorld==mc.theWorld){
+            // Repeated hits from the same attacker extend the active window without
+            // resetting attack credit on every damage event.
+            retaliationExpiresTick=ticks+100;
+            return;
+        }
         retaliationTarget=attacker;
         retaliationWorld=mc.theWorld;
         retaliationExpiresTick=ticks+100;
