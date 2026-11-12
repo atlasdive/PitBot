@@ -8,6 +8,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.network.NetworkPlayerInfo;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.gui.inventory.GuiChest;
@@ -24,6 +25,7 @@ import net.minecraft.util.Vec3;
 import net.minecraft.world.World;
 import net.minecraftforge.client.event.ClientChatReceivedEvent;
 import net.minecraftforge.client.event.GuiOpenEvent;
+import net.minecraftforge.event.entity.living.LivingHurtEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import org.lwjgl.opengl.GL11;
@@ -72,6 +74,15 @@ public final class GeodeClient {
     private final Set<BlockPos> failedGateApproaches=new HashSet<BlockPos>();
     private final Set<String> failedSewerEntrances=new HashSet<String>();
     private SewerEntrance activeSewerEntrance;
+    private EntityLivingBase retaliationTarget;
+    private World retaliationWorld;
+    private int retaliationExpiresTick,retaliationCpsWindowTicks,retaliationCps=17;
+    private final Random retaliationRandom=new Random();
+    private final CpsAttackClock retaliationAttackClock=new CpsAttackClock(17);
+    private final HurtTimeDetector localHurtDetector=new HurtTimeDetector();
+    private World swingTrackingWorld;
+    private final Map<UUID,Integer> recentAttackerSwingTicks=new HashMap<UUID,Integer>();
+    private final Map<UUID,Boolean> previousAttackerSwingState=new HashMap<UUID,Boolean>();
     private int sewerDestinationSearchRadius;
     private int gatePlaneY=GATE.y;
     private int ticks,waitTicks,scanTicks,emptyScans,retryTicks,openAttempts,failedClicks,lootSlotCursor,lootEmptyTicks,
@@ -91,11 +102,23 @@ public final class GeodeClient {
         while(TOGGLE_KEY.isPressed())toggle();
         EntityPlayerSP p=mc.thePlayer;World w=mc.theWorld;
         if(p==null||w==null){
+            localHurtDetector.reset();
+            resetAttackerSwingTracking();
             if(!running)return;
             if(hopPhase!=HopPhase.NONE||deathRestartPending){movement.stop();return;}
             stop("Disconnected");return;
         }
-        if(!running)return;
+        if(!running){
+            localHurtDetector.observe(p.hurtTime);
+            return;
+        }
+        if(swingTrackingWorld!=w){
+            resetAttackerSwingTracking();
+            swingTrackingWorld=w;
+            localHurtDetector.reset();
+        }
+        updateRecentAttackerSwings(p,w);
+        boolean damageDetected=localHurtDetector.observe(p.hurtTime);
         if(hopPhase==HopPhase.NONE&&!GeodeConfig.isAllowed(mc.getCurrentServerData()==null?"":mc.getCurrentServerData().serverIP,mc.isSingleplayer())){
             stop("Server is not allowlisted");tell("Stopped: add the exact host to config/geode.cfg > security.allowedServers.");return;
         }
@@ -112,6 +135,10 @@ public final class GeodeClient {
             return;
         }
         if(hopPhase!=HopPhase.NONE){tickServerHop(p,w);return;}
+        if(damageDetected&&isPathfindingStage()){
+            EntityLivingBase attacker=findRecentAttacker(p,w);
+            if(attacker!=null)beginRetaliation(attacker);
+        }
         if(ticks<hopRetryAt){movement.stop();return;}
         if(chestGuiOpenIntercepted&&(stage==Stage.OPEN||stage==Stage.LOOT)){
             chestGuiOpenIntercepted=false;
@@ -129,6 +156,7 @@ public final class GeodeClient {
             return;
         }
         if(stage==Stage.IDLE){beginSewerRun(p,w);return;}
+        tickRetaliation(p,w);
         collectResult(p);
         switch(stage){
             case TO_LAUNCH:case TO_GATE:case TO_SEWER_ENTRY_START:case TO_SEWER_ENTRY_DESTINATION:
@@ -153,6 +181,150 @@ public final class GeodeClient {
             case LOOT:lootChest(p);break;
             default:movement.stop();
         }
+    }
+
+    /**
+     * Damage events select a nearby attacker. Combat is opportunistic: it never
+     * writes player rotation or movement keys, so A* retains control of navigation.
+     */
+    @SubscribeEvent public void onLivingHurt(LivingHurtEvent event){
+        if(!running||mc.thePlayer==null||mc.theWorld==null
+                ||event.entity!=mc.thePlayer||event.source==null||!isPathfindingStage())return;
+        Entity source=event.source.getEntity();
+        if(!(source instanceof EntityLivingBase))source=event.source.getSourceOfDamage();
+        if(source instanceof EntityLivingBase)beginRetaliation((EntityLivingBase)source);
+    }
+
+    private void beginRetaliation(EntityLivingBase attacker){
+        if(!running||attacker==null||mc.thePlayer==null||mc.theWorld==null
+                ||!isPathfindingStage()||attacker==mc.thePlayer||attacker.isDead
+                ||!attacker.isEntityAlive()||attacker.worldObj!=mc.theWorld)return;
+        retaliationTarget=attacker;
+        retaliationWorld=mc.theWorld;
+        retaliationExpiresTick=ticks+100;
+        retaliationCps=16+retaliationRandom.nextInt(3);
+        retaliationCpsWindowTicks=0;
+        retaliationAttackClock.setCps(retaliationCps);
+        retaliationAttackClock.reset();
+    }
+
+    private void updateRecentAttackerSwings(EntityPlayerSP self,World world){
+        Set<UUID> present=new HashSet<UUID>();
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase)||entity==self)continue;
+            EntityLivingBase other=(EntityLivingBase)entity;
+            UUID id=other.getUniqueID();
+            present.add(id);
+            boolean swinging=other.isSwingInProgress;
+            Boolean wasSwinging=previousAttackerSwingState.put(id,swinging);
+            if(swinging&&(wasSwinging==null||!wasSwinging.booleanValue())){
+                recentAttackerSwingTicks.put(id,ticks);
+            }
+        }
+        previousAttackerSwingState.keySet().retainAll(present);
+        Iterator<Map.Entry<UUID,Integer>> it=recentAttackerSwingTicks.entrySet().iterator();
+        while(it.hasNext()){
+            Map.Entry<UUID,Integer> entry=it.next();
+            if(!present.contains(entry.getKey())||ticks-entry.getValue()>12)it.remove();
+        }
+    }
+
+    private void resetAttackerSwingTracking(){
+        swingTrackingWorld=null;
+        recentAttackerSwingTicks.clear();
+        previousAttackerSwingState.clear();
+    }
+
+    private EntityLivingBase findRecentAttacker(EntityPlayerSP self,World world){
+        EntityLivingBase best=null;
+        int bestAge=9;
+        float bestDistance=Float.MAX_VALUE;
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase))continue;
+            EntityLivingBase candidate=(EntityLivingBase)entity;
+            if(candidate==self||candidate.isDead||!candidate.isEntityAlive()
+                    ||candidate.worldObj!=world)continue;
+            float distance=self.getDistanceToEntity(candidate);
+            if(distance>7.0F||!isFacingTarget(candidate,self,85.0F))continue;
+            Integer swingTick=recentAttackerSwingTicks.get(candidate.getUniqueID());
+            if(swingTick==null)continue;
+            int age=ticks-swingTick;
+            if(age<0||age>8)continue;
+            if(age<bestAge||(age==bestAge&&distance<bestDistance)){
+                best=candidate;bestAge=age;bestDistance=distance;
+            }
+        }
+        if(best!=null)return best;
+
+        // Fallback for living entities whose swing animation is not replicated.
+        EntityLivingBase nearest=null;
+        float nearestDistance=4.25F;
+        for(Entity entity:world.loadedEntityList){
+            if(!(entity instanceof EntityLivingBase))continue;
+            EntityLivingBase candidate=(EntityLivingBase)entity;
+            if(candidate==self||candidate.isDead||!candidate.isEntityAlive()
+                    ||candidate.worldObj!=world)continue;
+            float distance=self.getDistanceToEntity(candidate);
+            if(distance>nearestDistance||!isFacingTarget(candidate,self,55.0F)
+                    ||!candidate.canEntityBeSeen(self))continue;
+            nearest=candidate;
+            nearestDistance=distance;
+        }
+        return nearest;
+    }
+
+    private boolean isFacingTarget(EntityLivingBase viewer,EntityLivingBase target,float maxError){
+        double dx=target.posX-viewer.posX;
+        double dz=target.posZ-viewer.posZ;
+        float targetYaw=(float)(Math.toDegrees(Math.atan2(dz,dx))-90.0D);
+        float error=Math.abs(MathHelper.wrapAngleTo180_float(targetYaw-viewer.rotationYawHead));
+        return error<=maxError;
+    }
+
+    private boolean isPathfindingStage(){
+        switch(stage){
+            case TO_LAUNCH:case TO_GATE:case TO_SEWER_ENTRY_START:case TO_SEWER_ENTRY_DESTINATION:
+            case TO_CHEST:case TO_SCAFFOLD:case PATROL:case WATER_RECOVERY:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Attacks the selected threat only when it is visible and within melee range.
+     * It does not chase, rotate toward, pause for, or otherwise steer toward it.
+     */
+    private void tickRetaliation(EntityPlayerSP player,World world){
+        EntityLivingBase target=retaliationTarget;
+        if(target==null)return;
+        if(world==null||world!=retaliationWorld||target.worldObj!=world
+                ||target.isDead||!target.isEntityAlive()||!isPathfindingStage()
+                ||ticks>retaliationExpiresTick||player.getDistanceToEntity(target)>8.0F){
+            clearRetaliation();
+            return;
+        }
+
+        if(++retaliationCpsWindowTicks>=20){
+            retaliationCpsWindowTicks=0;
+            retaliationCps=16+retaliationRandom.nextInt(3);
+            retaliationAttackClock.setCps(retaliationCps);
+        }
+
+        boolean attackReady=RetaliationPolicy.canAttack(
+                player.getDistanceToEntity(target),player.canEntityBeSeen(target),mc.currentScreen!=null);
+        if(retaliationAttackClock.tick(attackReady)){
+            player.swingItem();
+            mc.playerController.attackEntity(player,target);
+        }
+    }
+
+    private void clearRetaliation(){
+        retaliationTarget=null;
+        retaliationWorld=null;
+        retaliationExpiresTick=0;
+        retaliationCpsWindowTicks=0;
+        retaliationAttackClock.reset();
     }
 
     /**
@@ -298,6 +470,9 @@ public final class GeodeClient {
 
     private void suspendNavigation(EntityPlayerSP p){
         movement.stop();
+        clearRetaliation();
+        localHurtDetector.reset();
+        resetAttackerSwingTracking();
         cancelPathSearch(false);
         restoreScaffoldState(p);
         scaffoldPlan=null;scaffoldIndex=0;
@@ -390,6 +565,9 @@ public final class GeodeClient {
     private void stop(String why){
         running=false;stage=Stage.IDLE;status=why;hopPhase=HopPhase.NONE;hopOriginWorld=null;
         deathRestartPending=false;inSewer=false;movement.stop();
+        clearRetaliation();
+        localHurtDetector.reset();
+        resetAttackerSwingTracking();
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
         cancelPathSearch(false);pathTimeoutCount=0;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
