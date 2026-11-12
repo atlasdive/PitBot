@@ -139,6 +139,7 @@ public final class GeodeClient {
             EntityLivingBase attacker=findRecentAttacker(p,w);
             if(attacker!=null)beginRetaliation(attacker);
         }
+        tickRetaliation(p,w);
         if(ticks<hopRetryAt){movement.stop();return;}
         if(chestGuiOpenIntercepted&&(stage==Stage.OPEN||stage==Stage.LOOT)){
             chestGuiOpenIntercepted=false;
@@ -156,7 +157,6 @@ public final class GeodeClient {
             return;
         }
         if(stage==Stage.IDLE){beginSewerRun(p,w);return;}
-        tickRetaliation(p,w);
         collectResult(p);
         switch(stage){
             case TO_LAUNCH:case TO_GATE:case TO_SEWER_ENTRY_START:case TO_SEWER_ENTRY_DESTINATION:
