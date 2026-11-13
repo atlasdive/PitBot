@@ -59,6 +59,9 @@ public final class GeodeClient {
     private String status="Stopped",purpose="route",gateDiagnostics="not scanned";
     private BlockPos chest,lastStart,gateLanding,gateDropSource,patrolOrigin,patrolWaypoint;
     private BlockPos activeChestRouteTarget;
+    private final Set<BlockPos> visitedSpecialChestWaypoints=new HashSet<BlockPos>();
+    private BlockPos activeSpecialChestWaypoint;
+    private boolean specialChestRouteActive;
     private int chestTransitRange=24,chestApproachRadius=3;
     private final ChestLootTimer lootTimer=new ChestLootTimer();
     private ChestScaffoldPlan scaffoldPlan;
@@ -468,6 +471,7 @@ public final class GeodeClient {
         waterRecoveryRadius=8;waterResumeStage=Stage.SEEK;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
+        resetSpecialChestRoute();
         chestAimStableTicks=0;chestAimMissTicks=0;chestAimTicks=0;
         failedGateApproaches.clear();failedSewerEntrances.clear();activeSewerEntrance=null;resetGateState();
         tell("Sewer entry sequence started. Pathfinding to (16, 95, 16).");
@@ -577,6 +581,7 @@ public final class GeodeClient {
         chestGuiOpenIntercepted=false;closeWindowId=-1;closeAttempts=0;
         cancelPathSearch(false);pathTimeoutCount=0;chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;resetGateState();
         lootTimer.reset();lootSlotCursor=0;
+        resetSpecialChestRoute();
         restoreScaffoldState(mc.thePlayer);scaffoldPlan=null;scaffoldIndex=0;
     }
     private static ExecutorService createPathWorker(){
@@ -606,7 +611,7 @@ public final class GeodeClient {
             patrolScanTicks=0;
             BlockPos discovered=findNearestLoadedChest(p,w);
             if(discovered!=null){
-                emptyScans=0;chest=discovered;stage=Stage.TO_CHEST;
+                emptyScans=0;chest=discovered;beginSpecialChestRoute(discovered);stage=Stage.TO_CHEST;
                 status="Chest found while patrolling: "+discovered;
                 movement.stop();routeChest(p,w,discovered);
                 return;
@@ -628,6 +633,13 @@ public final class GeodeClient {
                 skipPatrolWaypoint("Patrol waypoint blocked; advancing to the next spiral point");
             }else if(stage==Stage.TO_SCAFFOLD){
                 failScaffold(p,w,"Could not reach the scaffold staging position");
+            }else if(stage==Stage.TO_CHEST&&specialChestRouteActive
+                    &&"special chest checkpoint".equals(purpose)
+                    &&activeSpecialChestWaypoint!=null){
+                visitedSpecialChestWaypoints.add(activeSpecialChestWaypoint);
+                status="Checkpoint stalled; skipping "+activeSpecialChestWaypoint+" and selecting another";
+                activeSpecialChestWaypoint=null;
+                routeSpecialChestCheckpoint(p,w,chest);
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.endsWith("transit")){
                 retryChestTransit(p,w,"Chest transit stalled");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
@@ -664,6 +676,14 @@ public final class GeodeClient {
         }else if(stage==Stage.TO_SCAFFOLD){
             beginScaffold(p);
         }else if(stage==Stage.TO_CHEST){
+            if(specialChestRouteActive&&activeSpecialChestWaypoint!=null){
+                visitedSpecialChestWaypoints.add(activeSpecialChestWaypoint);
+                status="Reached checkpoint "+activeSpecialChestWaypoint
+                        +" ("+visitedSpecialChestWaypoints.size()+"/13); selecting the next point";
+                activeSpecialChestWaypoint=null;
+                routeSpecialChestCheckpoint(p,w,chest);
+                return;
+            }
             ChestScaffoldPlan pendingScaffold=chest==null?null:ChestScaffoldPlan.forChest(chest);
             if(pendingScaffold!=null&&!chest.equals(scaffoldedChest)
                     &&!failedScaffoldChests.contains(chest)){
@@ -785,12 +805,59 @@ public final class GeodeClient {
         movement.stop();
         routeGate(p,w);
     }
+    private void resetSpecialChestRoute(){
+        specialChestRouteActive=false;
+        visitedSpecialChestWaypoints.clear();
+        activeSpecialChestWaypoint=null;
+    }
+
+    private void beginSpecialChestRoute(BlockPos target){
+        if(SpecialChestTarget.matches(target)&&!specialChestRouteActive){
+            specialChestRouteActive=true;
+            visitedSpecialChestWaypoints.clear();
+            activeSpecialChestWaypoint=null;
+            status="Preparing the 13 exact checkpoints leading to (99, 58, 46)";
+        }
+    }
+
+    private boolean isAtSpecialChestWaypoint(EntityPlayerSP p,BlockPos target){
+        double dx=p.posX-(target.x+0.5D),dz=p.posZ-(target.z+0.5D);
+        double dy=p.getEntityBoundingBox().minY-target.y;
+        return dx*dx+dz*dz<=0.36D&&Math.abs(dy)<=0.75D;
+    }
+
+    private void routeSpecialChestCheckpoint(EntityPlayerSP p,World w,BlockPos finalChest){
+        if(!specialChestRouteActive){routeChestDirect(p,w,finalChest);return;}
+        for(BlockPos point:SpecialChestRoutePlanner.checkpoints()){
+            if(!visitedSpecialChestWaypoints.contains(point)&&isAtSpecialChestWaypoint(p,point)){
+                visitedSpecialChestWaypoints.add(point);
+            }
+        }
+        List<BlockPos> remaining=SpecialChestRoutePlanner.remaining(visitedSpecialChestWaypoints);
+        if(remaining.isEmpty()){
+            specialChestRouteActive=false;
+            activeSpecialChestWaypoint=null;
+            status="All 13 checkpoints reached; proceeding to the existing final chest approach";
+            routeChestDirect(p,w,finalChest);
+            return;
+        }
+        activeSpecialChestWaypoint=null;
+        status="Selecting next checkpoint toward (99, 58, 46): "
+                +(visitedSpecialChestWaypoints.size()+1)+"/13 candidates remaining";
+        route(p,w,remaining,"special chest checkpoint",null,null,
+                SpecialChestRoutePlanner.finalTarget());
+    }
+
     private void routeChest(EntityPlayerSP p,World w,BlockPos c){
         if(!c.equals(activeChestRouteTarget)){
             activeChestRouteTarget=c;
             chestTransitRange=24;
             chestApproachRadius=3;
             failedChestApproaches.clear();
+        }
+        if(SpecialChestTarget.matches(c)&&specialChestRouteActive){
+            routeSpecialChestCheckpoint(p,w,c);
+            return;
         }
         ChestScaffoldPlan plan=ChestScaffoldPlan.forChest(c);
         if(plan!=null&&!c.equals(scaffoldedChest)&&!failedScaffoldChests.contains(c)){
@@ -825,6 +892,7 @@ public final class GeodeClient {
             return;
         }
         cooldown.put(chest,w.getTotalWorldTime()+100L);
+        resetSpecialChestRoute();
         status=reason+"; no safe transit route, skipping chest "+chest;
         chest=null;activeChestRouteTarget=null;scaffoldPlan=null;
         stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
@@ -852,6 +920,7 @@ public final class GeodeClient {
 
     private void skipBlockedChest(World w,String reason){
         if(chest!=null&&w!=null)cooldown.put(chest,w.getTotalWorldTime()+1200L);
+        resetSpecialChestRoute();
         status=reason+"; skipping chest temporarily";
         chest=null;activeChestRouteTarget=null;failedChestApproaches.clear();
         stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;retryTicks=ticks+5;
@@ -974,7 +1043,7 @@ public final class GeodeClient {
         route(p,w,dryCandidates,"Water escape");
     }
 
-    private void addGoalVariants(MinecraftPathWorld snap,List<PathNode> pathGoals,
+    private void addGoalVariants(PathWorld snap,List<PathNode> pathGoals,
                                  BlockPos pos,boolean requireDry){
         for(int half=0;half<=1;half++){
             int y2=pos.y*2+half;
@@ -1002,6 +1071,11 @@ public final class GeodeClient {
 
     private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why,
                       List<PathNode> exactGoals,BlockPos progressTarget){
+        route(p,w,rough,why,exactGoals,progressTarget,null);
+    }
+
+    private void route(EntityPlayerSP p,World w,List<BlockPos> rough,String why,
+                      List<PathNode> exactGoals,BlockPos progressTarget,BlockPos finalApproachTarget){
         cancelPathSearch(false);movement.stop();
         BlockPos start=playerPos(p);
         PathNode requestedStart=PathNode.atPlayer(p.posX,p.getEntityBoundingBox().minY,p.posZ);
@@ -1021,8 +1095,9 @@ public final class GeodeClient {
         }
         if(usingSewerSnapshot)snap=sewerSnapshot;
         else snap=MinecraftPathWorld.capture(w,p,requestedStart,captureGoals);
+        final PathWorld pathWorld=new RequiredCorridorPathWorld(snap);
         PathNode resolvedStart=PathStartResolver.resolve(
-                snap,p.posX,p.getEntityBoundingBox().minY,p.posZ);
+                pathWorld,p.posX,p.getEntityBoundingBox().minY,p.posZ);
         if(resolvedStart==null){
             status="No safe path start within 2 blocks of "+start+"; waiting for a clear standing position";
             retryTicks=ticks+20;
@@ -1051,14 +1126,14 @@ public final class GeodeClient {
             for(BlockPos approach:plan.approaches){
                 if(failedGateApproaches.contains(approach))continue;
                 int before=pathGoals.size();
-                addGoalVariants(snap,pathGoals,approach,false);
+                addGoalVariants(pathWorld,pathGoals,approach,false);
                 if(pathGoals.size()>before)goals.add(approach);
             }
             if(pathGoals.isEmpty()){
                 failedGateApproaches.clear();
                 for(BlockPos approach:plan.approaches){
                     int before=pathGoals.size();
-                    addGoalVariants(snap,pathGoals,approach,false);
+                    addGoalVariants(pathWorld,pathGoals,approach,false);
                     if(pathGoals.size()>before)goals.add(approach);
                 }
             }
@@ -1067,13 +1142,17 @@ public final class GeodeClient {
             previousGateFeet=Double.NaN;
         }else if(exactGoals!=null){
             for(PathNode goal:exactGoals){
-                if(snap.canStand(goal)){
+                if(pathWorld.canStand(goal)){
                     pathGoals.add(goal);
                     goals.add(goal.blockPos());
                 }
             }
         }else{
             for(BlockPos g:rough){
+                if("special chest checkpoint".equals(why)
+                        &&!w.isBlockLoaded(new net.minecraft.util.BlockPos(g.x,g.y,g.z),false)){
+                    continue;
+                }
                 if("Sewer patrol".equals(why)){
                     long dx=(long)g.x-start.x,dz=(long)g.z-start.z;
                     // Never accept the player's current cell or a nearby cell as a
@@ -1081,7 +1160,10 @@ public final class GeodeClient {
                     if(dx*dx+dz*dz<25L)continue;
                 }
                 int before=pathGoals.size();
-                addGoalVariants(snap,pathGoals,g,"Water escape".equals(why));
+                addGoalVariants(pathWorld,pathGoals,g,"Water escape".equals(why));
+                if("special chest checkpoint".equals(why)&&pathGoals.size()==before){
+                    visitedSpecialChestWaypoints.add(g);
+                }
                 if(progressTarget!=null){
                     double minimumProgress=Math.max(1.5D,Math.min(5.0D,chestTransitRange*0.15D));
                     for(int i=pathGoals.size()-1;i>=before;i--){
@@ -1110,13 +1192,22 @@ public final class GeodeClient {
                 for(int z=LAUNCH.z-1;z<=LAUNCH.z+1;z++){
                     BlockPos g=new BlockPos(x,y,z);
                     int before=pathGoals.size();
-                    addGoalVariants(snap,pathGoals,g,false);
+                    addGoalVariants(pathWorld,pathGoals,g,false);
                     if(pathGoals.size()>before)goals.add(g);
                 }
         }
         goalCandidates=pathGoals.size();
         if(pathGoals.isEmpty()){
-            if("Sewer entry start".equals(why)){
+            if("special chest checkpoint".equals(why)&&specialChestRouteActive
+                    &&SpecialChestRoutePlanner.remaining(visitedSpecialChestWaypoints).isEmpty()){
+                specialChestRouteActive=false;
+                activeSpecialChestWaypoint=null;
+                routeChestDirect(p,w,chest);
+                return;
+            }else if("special chest checkpoint".equals(why)&&specialChestRouteActive){
+                status="No loaded standable checkpoint cells; refreshing the 13-point route";
+                retryTicks=ticks+40;
+            }else if("Sewer entry start".equals(why)){
                 failSewerEntrance(p,w,"Nearest registered Sewer entrance has no standable approach");
                 return;
             }else if("Sewer entry destination".equals(why)){
@@ -1147,7 +1238,7 @@ public final class GeodeClient {
             }
             return;
         }
-        if(!snap.canStand(pathStart)){
+        if(!pathWorld.canStand(pathStart)){
             if("Sewer patrol".equals(why)){
                 skipPatrolWaypoint("Patrol start cell is not standable");
             }else if("chest scaffold staging".equals(why)&&chest!=null){
@@ -1159,8 +1250,14 @@ public final class GeodeClient {
             return;
         }
         purpose=why;status="Computing "+why+" path from "+start+" ("+goalCandidates+" goals)...";
-        final MinecraftPathWorld pathSnapshot=snap;
-        future=worker.submit(()->new Pathfinder().findNodes(pathSnapshot,pathStart,pathGoals,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        final PathWorld pathSnapshot=pathWorld;
+        if(finalApproachTarget!=null){
+            future=worker.submit(()->new Pathfinder().findNodesToward(pathSnapshot,pathStart,pathGoals,
+                    finalApproachTarget,GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        }else{
+            future=worker.submit(()->new Pathfinder().findNodes(pathSnapshot,pathStart,pathGoals,
+                    GeodeConfig.maxExpandedNodes,GeodeConfig.maxFallBlocks));
+        }
         futureStartedAtNanos=System.nanoTime();
         futurePurpose=why;
     }
@@ -1188,7 +1285,18 @@ public final class GeodeClient {
             expandedNodes=r.expanded;
             if(r.found()){
                 pathTimeoutCount=0;
-                if(stage==Stage.TO_SEWER_ENTRY_START){
+                if("special chest checkpoint".equals(purpose)&&stage==Stage.TO_CHEST){
+                    PathStep endpoint=r.steps.get(r.steps.size()-1);
+                    activeSpecialChestWaypoint=SpecialChestRoutePlanner.matchCheckpoint(
+                            endpoint.pos,SpecialChestRoutePlanner.remaining(visitedSpecialChestWaypoints));
+                    if(activeSpecialChestWaypoint==null){
+                        status="Checkpoint route endpoint did not match an unvisited coordinate; recalculating";
+                        retryTicks=ticks+10;
+                        return;
+                    }
+                    status="Route to checkpoint ready: "+activeSpecialChestWaypoint
+                            +" ("+visitedSpecialChestWaypoints.size()+"/13 visited)";
+                }else if(stage==Stage.TO_SEWER_ENTRY_START){
                     PathStep endpoint=r.steps.get(r.steps.size()-1);
                     if(activeSewerEntrance==null
                             ||!activeSewerEntrance.getStart().equals(endpoint.pos)){
@@ -1224,6 +1332,11 @@ public final class GeodeClient {
                 movement.setPath(r.steps,p,stage==Stage.TO_SCAFFOLD);
             }else if(p.isInWater()&&stage!=Stage.WATER_RECOVERY){
                 beginWaterRecovery(p,mc.theWorld);
+            }else if(stage==Stage.TO_CHEST&&specialChestRouteActive
+                    &&"special chest checkpoint".equals(purpose)){
+                activeSpecialChestWaypoint=null;
+                status="No reachable unvisited checkpoint in the current snapshot; refreshing route";
+                retryTicks=ticks+40;
             }else if(stage==Stage.TO_SEWER_ENTRY_START){
                 failSewerEntrance(p,mc.theWorld,"No path to nearest Sewer entrance ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_SEWER_ENTRY_DESTINATION){
@@ -1450,7 +1563,7 @@ public final class GeodeClient {
     private void findChest(EntityPlayerSP p,World w){
         BlockPos best=findNearestLoadedChest(p,w);
         if(best!=null){
-            emptyScans=0;chest=best;stage=Stage.TO_CHEST;
+            emptyScans=0;chest=best;beginSpecialChestRoute(best);stage=Stage.TO_CHEST;
             status="Chest found: "+best;
             routeChest(p,w,best);
         }else if(++emptyScans>=5){
@@ -1730,6 +1843,7 @@ public final class GeodeClient {
     }
     private void finish(boolean emptied){
         if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
+        resetSpecialChestRoute();
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootEmptyTicks=0;lootTimer.reset();
         closeWindowId=-1;closeAttempts=0;chestGuiOpenIntercepted=false;
         status=emptied?"Chest emptied and GUI closed; searching for next":"Chest GUI closed; searching for next";

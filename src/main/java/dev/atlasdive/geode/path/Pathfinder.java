@@ -9,16 +9,30 @@ public final class Pathfinder {
         return findNodes(world,PathNode.fromBlockPos(start),nodes,maxNodes,maxFall);
     }
     public PathResult findNodes(PathWorld world,PathNode start,List<PathNode> goals,int maxNodes,int maxFall){
-        if(world==null||start==null||goals==null||goals.isEmpty()||!world.canStand(start))
+        return findNodesInternal(world,start,goals,maxNodes,maxFall,
+                goals==null?null:new GoalIndex(goals));
+    }
+    /**
+     * Selects a reachable checkpoint by minimizing actual A* travel cost plus
+     * remaining horizontal distance to the final target.
+     */
+    public PathResult findNodesToward(PathWorld world,PathNode start,List<PathNode> goals,
+                                      BlockPos finalTarget,int maxNodes,int maxFall){
+        if(finalTarget==null)return findNodes(world,start,goals,maxNodes,maxFall);
+        return findNodesInternal(world,start,goals,maxNodes,maxFall,
+                new FinalApproachHeuristic(finalTarget));
+    }
+    private PathResult findNodesInternal(PathWorld world,PathNode start,List<PathNode> goals,
+                                         int maxNodes,int maxFall,PathHeuristic heuristic){
+        if(world==null||start==null||goals==null||goals.isEmpty()||heuristic==null||!world.canStand(start))
             return new PathResult(Collections.<PathStep>emptyList(),0);
         Set<PathNode> targets=new HashSet<PathNode>(goals);
-        GoalIndex goalIndex=new GoalIndex(goals);
         Map<PathNode,Double> best=new HashMap<PathNode,Double>();
         Map<PathNode,Parent> parents=new HashMap<PathNode,Parent>();
         PriorityQueue<Entry> open=new PriorityQueue<Entry>(64,new Comparator<Entry>(){
             public int compare(Entry a,Entry b){return Double.compare(a.f,b.f);}
         });
-        best.put(start,0.0D);open.add(new Entry(start,0.0D,goalIndex.distance(start)));
+        best.put(start,0.0D);open.add(new Entry(start,0.0D,heuristic.distance(start)));
         int expanded=0;
         while(!open.isEmpty()&&expanded<maxNodes){
             if(Thread.currentThread().isInterrupted())
@@ -33,7 +47,7 @@ public final class Pathfinder {
                 if(world.canStand(shifted)&&world.transitionClear(cur.pos,shifted))
                     relax(shifted,MovementKind.WALK,cur.pos,
                             cur.g+0.85D+centerLanePreferencePenalty(world,shifted),
-                            goalIndex,best,parents,open);
+                            heuristic,best,parents,open);
             }
             boolean onClimbable=world.climbable(cur.pos);
             int climbDirection=onClimbable?VineTraversal.verticalDirection(cur.pos,goals):0;
@@ -49,7 +63,7 @@ public final class Pathfinder {
                         double climbCost=verticalKind==MovementKind.CLIMB
                                 ?0.22D+Math.abs(dyHalf)*0.12D:0.8D;
                         relax(to,kind,cur.pos,cur.g+climbCost+Math.max(0.0D,world.extraCost(to)),
-                                goalIndex,best,parents,open);
+                                heuristic,best,parents,open);
                     }
                 }
             }
@@ -65,7 +79,7 @@ public final class Pathfinder {
                             (world.liquid(cur.pos)||world.liquid(landing))?MovementKind.SWIM:
                             dyHalf==-1?MovementKind.STEP_DOWN:MovementKind.DROP;
                     relax(landing,kind,cur.pos,cur.g+Math.max(0.0D,world.extraCost(landing)),
-                            goalIndex,best,parents,open);
+                            heuristic,best,parents,open);
                 }
             }
             for(int[] d:DIRS){
@@ -86,7 +100,7 @@ public final class Pathfinder {
                             ||climbDirection<0&&dyHalf>0))continue;
                     for(int lane=0;lane<PathNode.LANE_COUNT;lane++){
                         PathNode next=new PathNode(cur.pos.x+d[0],cur.pos.y2+dyHalf,cur.pos.z+d[1],lane);
-                        addHorizontalTransition(world,cur.pos,next,dyHalf,d[0],d[1],goalIndex,best,parents,open,cur.g);
+                        addHorizontalTransition(world,cur.pos,next,dyHalf,d[0],d[1],heuristic,best,parents,open,cur.g);
                     }
                 }
                 for(int dyHalf=-4;dyHalf>=-maxFall*2;dyHalf-=2){
@@ -103,14 +117,14 @@ public final class Pathfinder {
                         double lanePenalty=lane==cur.pos.lane?0.0D:0.18D;
                         relax(next,kind,cur.pos,cur.g+horizontal+lanePenalty
                                 +centerLanePreferencePenalty(world,next)
-                                +Math.max(0.0D,world.extraCost(next)),goalIndex,best,parents,open);
+                                +Math.max(0.0D,world.extraCost(next)),heuristic,best,parents,open);
                     }
                 }
                 PathNode jump=new PathNode(cur.pos.x+d[0]*2,cur.pos.y2,cur.pos.z+d[1]*2,cur.pos.lane);
                 if(world.canStand(jump)&&!world.hazard(jump)&&world.jumpArcClear(cur.pos,jump)){
                     double cost=2.0D*Math.sqrt(d[0]*d[0]+d[1]*d[1])+2.0D
                             +Math.max(0.0D,world.extraCost(jump));
-                    relax(jump,MovementKind.JUMP,cur.pos,cur.g+cost,goalIndex,best,parents,open);
+                    relax(jump,MovementKind.JUMP,cur.pos,cur.g+cost,heuristic,best,parents,open);
                 }
             }
             if(Thread.currentThread().isInterrupted())break;
@@ -118,7 +132,7 @@ public final class Pathfinder {
         return new PathResult(Collections.<PathStep>emptyList(),expanded);
     }
     private static void addHorizontalTransition(PathWorld world,PathNode from,PathNode next,int dyHalf,
-            int dx,int dz,GoalIndex goalIndex,Map<PathNode,Double> best,Map<PathNode,Parent> parents,
+            int dx,int dz,PathHeuristic heuristic,Map<PathNode,Double> best,Map<PathNode,Parent> parents,
             PriorityQueue<Entry> open,double base){
         if(!world.canStand(next)||world.hazard(next)||!world.transitionClear(from,next))return;
         MovementKind kind;
@@ -144,7 +158,7 @@ public final class Pathfinder {
         else if(kind==MovementKind.SWIM)stepCost+=0.6D;
         else if(kind==MovementKind.CLIMB)stepCost+=0.30D;
         relax(next,kind,from,base+stepCost+Math.max(0.0D,world.extraCost(next)),
-                goalIndex,best,parents,open);
+                heuristic,best,parents,open);
     }
     private static double centerLanePreferencePenalty(PathWorld world,PathNode node){
         if(node.lane==PathNode.CENTER)return 0.0D;
@@ -152,12 +166,12 @@ public final class Pathfinder {
         return world.canStand(center)&&world.transitionClear(node,center)
                 ?CENTER_LANE_PREFERENCE_PENALTY:0.0D;
     }
-    private static void relax(PathNode next,MovementKind kind,PathNode from,double g,GoalIndex goalIndex,
+    private static void relax(PathNode next,MovementKind kind,PathNode from,double g,PathHeuristic heuristic,
             Map<PathNode,Double> best,Map<PathNode,Parent> parents,PriorityQueue<Entry> open){
         Double old=best.get(next);
         if(old==null||g+EPS<old){
             best.put(next,g);parents.put(next,new Parent(from,kind));
-            open.add(new Entry(next,g,goalIndex.distance(next)));
+            open.add(new Entry(next,g,heuristic.distance(next)));
         }
     }
     private static boolean dropArcClear(PathWorld world,PathNode from,PathNode landing,int dx,int dz){
@@ -207,14 +221,15 @@ public final class Pathfinder {
      * ignores height, keeping it a lower bound while avoiding a full goal scan
      * for every neighbor expanded by A*.
      */
-    private static final class GoalIndex {
+    private interface PathHeuristic { double distance(PathNode node); }
+    private static final class GoalIndex implements PathHeuristic {
         private final GoalNode root;
         GoalIndex(List<PathNode> goals){
             List<GoalPoint> points=new ArrayList<GoalPoint>(goals.size());
             for(PathNode goal:goals)points.add(new GoalPoint(goal.worldX(),goal.worldZ()));
             root=build(points,0);
         }
-        double distance(PathNode node){
+        public double distance(PathNode node){
             return Math.sqrt(nearestSquared(root,node.worldX(),node.worldZ(),Double.POSITIVE_INFINITY));
         }
         private static GoalNode build(List<GoalPoint> points,int depth){
@@ -242,6 +257,15 @@ public final class Pathfinder {
             best=nearestSquared(near,x,z,best);
             if(split*split<best)best=nearestSquared(far,x,z,best);
             return best;
+        }
+    }
+    /** Horizontal Euclidean lower bound to the final Sewer chest target. */
+    private static final class FinalApproachHeuristic implements PathHeuristic {
+        private final double x,z;
+        FinalApproachHeuristic(BlockPos target){x=target.x+0.5D;z=target.z+0.5D;}
+        public double distance(PathNode node){
+            double dx=node.worldX()-x,dz=node.worldZ()-z;
+            return Math.sqrt(dx*dx+dz*dz);
         }
     }
     private static final class GoalPoint {
