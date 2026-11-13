@@ -27,6 +27,12 @@ public class SpecialChestRoutePlannerTest {
         assertTrue(points.contains(new BlockPos(103,58,12)));
     }
 
+    @Test public void switchesToFinalApproachWithinTheExistingChestSegmentRange(){
+        assertTrue(SpecialChestRoutePlanner.isWithinFinalApproachRange(75.5D,46.5D,24));
+        assertTrue(SpecialChestRoutePlanner.isWithinFinalApproachRange(99.5D,46.5D,24));
+        assertFalse(SpecialChestRoutePlanner.isWithinFinalApproachRange(74.4D,46.5D,24));
+    }
+
     @Test public void remainingRemovesVisitedCoordinatesOnly(){
         Set<BlockPos> visited=new HashSet<BlockPos>();
         visited.add(new BlockPos(69,53,72));

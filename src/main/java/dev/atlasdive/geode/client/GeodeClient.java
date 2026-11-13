@@ -833,6 +833,14 @@ public final class GeodeClient {
                 visitedSpecialChestWaypoints.add(point);
             }
         }
+        if(SpecialChestRoutePlanner.isWithinFinalApproachRange(
+                p.posX,p.posZ,chestTransitRange)){
+            specialChestRouteActive=false;
+            activeSpecialChestWaypoint=null;
+            status="Within final chest range; switching to the existing final approach";
+            routeChestDirect(p,w,finalChest);
+            return;
+        }
         List<BlockPos> remaining=SpecialChestRoutePlanner.remaining(visitedSpecialChestWaypoints);
         if(remaining.isEmpty()){
             specialChestRouteActive=false;

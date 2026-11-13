@@ -30,6 +30,15 @@ public final class SpecialChestRoutePlanner {
 
     public static BlockPos finalTarget(){return FINAL_TARGET;}
 
+    /**
+     * The final chest routine uses the same horizontal segment limit as the
+     * regular chest route. Once inside that range, intermediate checkpoints
+     * are no longer necessary.
+     */
+    public static boolean isWithinFinalApproachRange(double x,double z,int maxSegment){
+        return ChestRoutePlanner.nextWaypoint(x,z,FINAL_TARGET,maxSegment,FINAL_TARGET.y)==null;
+    }
+
     public static List<BlockPos> checkpoints(){
         List<BlockPos> result=new ArrayList<BlockPos>(CHECKPOINTS.length);
         Collections.addAll(result,CHECKPOINTS);
