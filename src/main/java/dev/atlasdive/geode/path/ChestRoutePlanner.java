@@ -1,5 +1,8 @@
 package dev.atlasdive.geode.path;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Splits long horizontal chest routes into bounded A* segments. */
 public final class ChestRoutePlanner {
     private ChestRoutePlanner() {}
