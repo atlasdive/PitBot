@@ -29,6 +29,30 @@ public class SpecialChestRoutingTest {
                 40.5D, 60.5D, 50.5D, 60.5D, target, 2.0D));
     }
 
+    @Test public void transitSearchVolumeExpandsHorizontallyAndVertically() {
+        BlockPos waypoint = new BlockPos(36, 58, 33);
+        List<BlockPos> compact = ChestRoutePlanner.transitCandidates(waypoint, 2, 3);
+        assertEquals(175, compact.size());
+        assertTrue(compact.contains(new BlockPos(34, 55, 31)));
+        assertTrue(compact.contains(new BlockPos(38, 61, 35)));
+
+        List<BlockPos> expanded = ChestRoutePlanner.transitCandidates(waypoint, 6, 9);
+        assertEquals(3211, expanded.size());
+        assertTrue(expanded.contains(new BlockPos(30, 49, 27)));
+        assertTrue(expanded.contains(new BlockPos(42, 67, 39)));
+    }
+
+    @Test public void screenshotTransitAreaIsNotRejectedByTheProgressFilter() {
+        BlockPos chest = new BlockPos(18, 53, 29);
+        BlockPos waypoint = ChestRoutePlanner.nextWaypoint(48.5D, 36.5D, chest, 12, 58);
+        assertEquals(new BlockPos(36, 58, 33), waypoint);
+        for (BlockPos candidate : ChestRoutePlanner.transitCandidates(waypoint, 2, 3)) {
+            assertTrue("Every cell in the screenshot's transit box should advance toward the chest",
+                    ChestRoutePlanner.makesProgress(48.5D, 36.5D,
+                            candidate.x + 0.5D, candidate.z + 0.5D, chest, 3.6D));
+        }
+    }
+
     @Test public void specialChestApproachHasSeveralStandableCellsAroundTarget() {
         BlockPos chest = new BlockPos(99, 61, 46);
         List<PathNode> goals = SpecialChestTarget.approachGoals(chest);

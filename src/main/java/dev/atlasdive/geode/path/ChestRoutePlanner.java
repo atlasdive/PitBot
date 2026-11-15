@@ -20,6 +20,25 @@ public final class ChestRoutePlanner {
         return new BlockPos((int)Math.floor(startX+dx*t),y,(int)Math.floor(startZ+dz*t));
     }
 
+    /**
+     * Builds a three-dimensional search volume around an intermediate chest waypoint.
+     * Wider radii and vertical ranges let A* choose nearby walkable ground when the
+     * direct line to a chest crosses a wall, gap, stairwell, or unloaded area.
+     */
+    public static List<BlockPos> transitCandidates(BlockPos centre,int horizontalRadius,int verticalRange) {
+        if(centre==null)throw new IllegalArgumentException("centre cannot be null");
+        if(horizontalRadius<0||verticalRange<0)throw new IllegalArgumentException("search ranges cannot be negative");
+        List<BlockPos> result=new ArrayList<BlockPos>();
+        for(int x=centre.x-horizontalRadius;x<=centre.x+horizontalRadius;x++){
+            for(int y=centre.y-verticalRange;y<=centre.y+verticalRange;y++){
+                for(int z=centre.z-horizontalRadius;z<=centre.z+horizontalRadius;z++){
+                    result.add(new BlockPos(x,y,z));
+                }
+            }
+        }
+        return result;
+    }
+
     /** Reject transit goals that do not make measurable progress toward the target. */
     public static boolean makesProgress(double startX,double startZ,
             double goalX,double goalZ,BlockPos target,double minimumProgress) {
