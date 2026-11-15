@@ -102,6 +102,11 @@ public final class GeodeClient {
     private double launchY,launchX,launchZ,previousGateFeet=Double.NaN;
     private boolean gateCrossed;
     private final Map<BlockPos,Long> cooldown=new HashMap<BlockPos,Long>();
+    private final Map<BlockPos,BlockPos> cooldownRetryOrigins=new HashMap<BlockPos,BlockPos>();
+    private final Set<BlockPos> cooldownChestScanSet=new HashSet<BlockPos>();
+    private int registeredChestBlocks,readyChestTiles;
+    private int cooldownChestTiles;
+    private BlockPos lastCooldownChest,lastSelectedChest;
 
     @SubscribeEvent public void onTick(TickEvent.ClientTickEvent e) {
         if(e.phase!=TickEvent.Phase.END)return;
@@ -379,19 +384,23 @@ public final class GeodeClient {
                 +" | crossed: "+gateCrossed,7,29,0x55FFFF);
         mc.fontRendererObj.drawStringWithShadow("Gate scan: "+gateDiagnostics,7,40,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow(chest==null?"Chest: scanning loaded chunks":"Chest: "+chest,7,51,0x55FFFF);
-        mc.fontRendererObj.drawStringWithShadow("Chests: loaded "+loadedChestTiles+" | excluded "+excludedChestTiles,7,62,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,73,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chests: loaded "+loadedChestTiles+" | excluded "+excludedChestTiles
+                +" | registered "+registeredChestBlocks+" | ready "+readyChestTiles,7,62,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Chest scan: cooldown "+cooldownChestTiles
+                +(lastCooldownChest==null?"":" at "+lastCooldownChest)
+                +(lastSelectedChest==null?"":" | selected "+lastSelectedChest),7,73,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Expanded: "+expandedNodes+" | Goals: "+goalCandidates,7,84,0xAAAAAA);
         if(mc.thePlayer!=null){
-            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,84,0xAAAAAA);
+            mc.fontRendererObj.drawStringWithShadow("Player: "+playerPos(mc.thePlayer),7,95,0xAAAAAA);
         }
-        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,95,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("Scaffold: "+scaffoldIndex+"/7"+(stage==Stage.BUILD_SCAFFOLD?" placing":""),7,106,0xAAAAAA);
-        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,117,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Patrol: "+patrolLeg+(patrolWaypoint==null?"":" -> "+patrolWaypoint),7,106,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("Scaffold: "+scaffoldIndex+"/7"+(stage==Stage.BUILD_SCAFFOLD?" placing":""),7,117,0xAAAAAA);
+        mc.fontRendererObj.drawStringWithShadow("G: toggle",7,128,0xAAAAAA);
         mc.fontRendererObj.drawStringWithShadow("Transit: segment "+chestTransitRange
                 +" | area "+chestTransitSearchRadius+"x"+chestTransitVerticalRange
                 +" | loaded "+transitLoadedBlocks+"/"+transitCandidateBlocks
                 +" | standable "+transitStandableNodes
-                +" | filtered "+transitProgressFilteredNodes,7,128,0xAAAAAA);
+                +" | filtered "+transitProgressFilteredNodes,7,139,0xAAAAAA);
     }
 
     @SubscribeEvent public void onWorldRender(RenderWorldLastEvent e){
@@ -476,7 +485,7 @@ public final class GeodeClient {
         suspendNavigation(p);
         inSewer=false;hopRetryAt=0;stage=Stage.TO_LAUNCH;
         launchX=p.posX;launchY=p.posY;launchZ=p.posZ;launchDetected=false;
-        cooldown.clear();chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;emptyScans=0;patrolLeg=0;patrolFailures=0;retryTicks=ticks;
+        cooldown.clear();cooldownRetryOrigins.clear();chest=null;sewerSnapshot=null;sewerSnapshotWorld=null;emptyScans=0;patrolLeg=0;patrolFailures=0;retryTicks=ticks;
         waterRecoveryRadius=8;waterResumeStage=Stage.SEEK;
         scaffoldedChest=null;failedScaffoldChests.clear();scaffoldPlan=null;restoreScaffoldState(p);
         patrolOrigin=null;patrolWaypoint=null;patrolTransit=false;lootTimer.reset();lootSlotCursor=0;
@@ -908,6 +917,37 @@ public final class GeodeClient {
         routeChestDirect(p,w,c);
     }
 
+    private void putChestCooldown(BlockPos target,int durationTicks,EntityPlayerSP player,
+                                  boolean retryAfterPlayerMoves){
+        if(target==null)return;
+        cooldown.put(target,(long)ticks+durationTicks);
+        if(retryAfterPlayerMoves&&player!=null){
+            cooldownRetryOrigins.put(target,playerPos(player));
+        }else{
+            cooldownRetryOrigins.remove(target);
+        }
+    }
+
+    private boolean isChestCoolingDown(BlockPos target,EntityPlayerSP player){
+        Long until=cooldown.get(target);
+        if(until==null)return false;
+        BlockPos origin=cooldownRetryOrigins.get(target);
+        BlockPos current=player==null?null:playerPos(player);
+        if(ChestCooldownPolicy.shouldSuppress(ticks,until.longValue(),origin,current,8.0D)){
+            return true;
+        }
+        cooldown.remove(target);
+        cooldownRetryOrigins.remove(target);
+        return false;
+    }
+
+    private void recordCooldownChest(BlockPos target){
+        if(target!=null&&cooldownChestScanSet.add(target)){
+            cooldownChestTiles=cooldownChestScanSet.size();
+            lastCooldownChest=target;
+        }
+    }
+
     private void retryChestTransit(EntityPlayerSP p,World w,String reason){
         if(chest==null||w==null){stage=Stage.SEEK;retryTicks=ticks+5;return;}
         movement.stop();
@@ -942,7 +982,7 @@ public final class GeodeClient {
             routeChest(p,w,chest);
             return;
         }
-        cooldown.put(chest,w.getTotalWorldTime()+100L);
+        putChestCooldown(chest,100,p,true);
         resetSpecialChestRoute();
         status=reason+"; no safe transit or direct route, skipping chest "+chest;
         chest=null;activeChestRouteTarget=null;scaffoldPlan=null;
@@ -965,12 +1005,12 @@ public final class GeodeClient {
             routeChestDirect(p,w,chest);
             return;
         }
-        skipBlockedChest(w,reason+"; no reachable line-of-sight approach within 4 blocks");
+        skipBlockedChest(p,w,reason+"; no reachable line-of-sight approach within 4 blocks");
 
     }
 
-    private void skipBlockedChest(World w,String reason){
-        if(chest!=null&&w!=null)cooldown.put(chest,w.getTotalWorldTime()+1200L);
+    private void skipBlockedChest(EntityPlayerSP p,World w,String reason){
+        if(chest!=null&&w!=null)putChestCooldown(chest,1200,p,true);
         resetSpecialChestRoute();
         status=reason+"; skipping chest temporarily";
         chest=null;activeChestRouteTarget=null;failedChestApproaches.clear();
@@ -1303,7 +1343,7 @@ public final class GeodeClient {
             }else if("chest scaffold staging".equals(why)&&chest!=null){
                 failScaffold(p,w,"Scaffold staging position is not reachable");
             }else if(why.startsWith("chest-visible ")&&chest!=null){
-                skipBlockedChest(w,"No reachable line-of-sight position for "+chest);
+                skipBlockedChest(p,w,"No reachable line-of-sight position for "+chest);
             }else if(progressTarget==null&&why.startsWith("chest ")&&chest!=null){
                 retryChestApproach(p,w,"No safe approach cells for "+chest);
             }else{
@@ -1422,7 +1462,7 @@ public final class GeodeClient {
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.endsWith("transit")){
                 retryChestTransit(p,mc.theWorld,"No path for chest transit segment");
             }else if(stage==Stage.TO_CHEST&&chest!=null&&purpose.startsWith("chest-visible ")){
-                skipBlockedChest(mc.theWorld,"No route to a visible side of chest "+chest+" ("+r.expanded+" nodes)");
+                skipBlockedChest(p,mc.theWorld,"No route to a visible side of chest "+chest+" ("+r.expanded+" nodes)");
             }else if(stage==Stage.TO_CHEST&&chest!=null){
                 retryChestApproach(p,mc.theWorld,"No route to chest "+chest+" ("+r.expanded+" nodes)");
             }else if(stage==Stage.WATER_RECOVERY){
@@ -1652,20 +1692,27 @@ public final class GeodeClient {
     private BlockPos findNearestLoadedChest(EntityPlayerSP p,World w){
         BlockPos best=null;
         double bestDistance=Double.POSITIVE_INFINITY;
-        long now=w.getTotalWorldTime();
-        loadedChestTiles=0;excludedChestTiles=0;
+        loadedChestTiles=0;excludedChestTiles=0;registeredChestBlocks=0;readyChestTiles=0;
+        cooldownChestTiles=0;lastCooldownChest=null;lastSelectedChest=null;
+        cooldownChestScanSet.clear();
         for(BlockPos candidate:SewerChestLocations.registered()){
-            Long until=cooldown.get(candidate);
-            if(until!=null&&until>now)continue;
             net.minecraft.util.BlockPos pos=new net.minecraft.util.BlockPos(candidate.x,candidate.y,candidate.z);
             if(!w.isBlockLoaded(pos,false))continue;
             Block block=w.getBlockState(pos).getBlock();
             if(block!=net.minecraft.init.Blocks.chest&&block!=net.minecraft.init.Blocks.trapped_chest)continue;
+            registeredChestBlocks++;
+            if(isChestCoolingDown(candidate,p)){
+                recordCooldownChest(candidate);
+                continue;
+            }
             double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
             if(distance<bestDistance){bestDistance=distance;best=candidate;}
         }
-        BlockPos knownSpecial=findLoadedSpecialChest(w,now);
-        if(knownSpecial!=null)return knownSpecial;
+        BlockPos knownSpecial=findLoadedSpecialChest(w,p);
+        if(knownSpecial!=null){
+            lastSelectedChest=knownSpecial;
+            return knownSpecial;
+        }
         for(Object o:w.loadedTileEntityList)if(o instanceof TileEntityChest){
             loadedChestTiles++;
             net.minecraft.util.BlockPos pos=((TileEntityChest)o).getPos();
@@ -1674,31 +1721,40 @@ public final class GeodeClient {
                 continue;
             }
             BlockPos candidate=new BlockPos(pos.getX(),pos.getY(),pos.getZ());
-            Long until=cooldown.get(candidate);
-            if(until!=null&&until>now)continue;
+            if(isChestCoolingDown(candidate,p)){
+                recordCooldownChest(candidate);
+                continue;
+            }
+            readyChestTiles++;
             // The special chest is the explicit target for this route. Prefer it over
-            // unrelated nearby chests, while still respecting its normal retry cooldown.
-            if(ChestScaffoldPlan.forChest(candidate)!=null||SpecialChestTarget.matches(candidate))return candidate;
+            // unrelated nearby chests after applying the movement-aware retry policy.
+            if(ChestScaffoldPlan.forChest(candidate)!=null||SpecialChestTarget.matches(candidate)){
+                lastSelectedChest=candidate;
+                return candidate;
+            }
             double distance=candidate.distanceSquared(p.posX,p.getEntityBoundingBox().minY,p.posZ);
             if(distance<bestDistance){bestDistance=distance;best=candidate;}
         }
-        return knownSpecial!=null?knownSpecial:best;
+        lastSelectedChest=best;
+        return best;
     }
 
     /** Check fixed special targets directly as well as through loaded tile entities. */
-    private BlockPos findLoadedSpecialChest(World w,long now){
+    private BlockPos findLoadedSpecialChest(World w,EntityPlayerSP player){
         List<BlockPos> targets=new ArrayList<BlockPos>();
         targets.add(new BlockPos(80,60,66));
         for(int y=61;y<=63;y++)targets.add(new BlockPos(99,y,46));
         for(BlockPos target:targets){
             if(isExcludedChest(target.x,target.y,target.z))continue;
-            Long until=cooldown.get(target);
-            if(until!=null&&until>now)continue;
             net.minecraft.util.BlockPos pos=new net.minecraft.util.BlockPos(target.x,target.y,target.z);
             if(!w.isBlockLoaded(pos,false))continue;
             net.minecraft.block.Block block=w.getBlockState(pos).getBlock();
-            if(block==net.minecraft.init.Blocks.chest||block==net.minecraft.init.Blocks.trapped_chest)
-                return target;
+            if(block!=net.minecraft.init.Blocks.chest&&block!=net.minecraft.init.Blocks.trapped_chest)continue;
+            if(isChestCoolingDown(target,player)){
+                recordCooldownChest(target);
+                continue;
+            }
+            return target;
         }
         return null;
     }
@@ -1712,7 +1768,7 @@ public final class GeodeClient {
         net.minecraft.util.BlockPos bp=new net.minecraft.util.BlockPos(chest.x,chest.y,chest.z);
         if(!w.isBlockLoaded(bp,false)||(w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.chest
                 &&w.getBlockState(bp).getBlock()!=net.minecraft.init.Blocks.trapped_chest)){
-            cooldown.put(chest,w.getTotalWorldTime()+100L);chest=null;stage=Stage.SEEK;return;
+            putChestCooldown(chest,100,p,true);chest=null;stage=Stage.SEEK;return;
         }
         if(isContainerGuiOpen(p)){
             stage=Stage.LOOT;lootTimer.reset();lootSlotCursor=0;lootEmptyTicks=0;failedClicks=0;
@@ -1734,13 +1790,13 @@ public final class GeodeClient {
     private void tickChestOpen(EntityPlayerSP p,net.minecraft.util.BlockPos bp){
         chestAimTicks++;
         if(openAttempts>=3&&ticks>=retryTicks){
-            cooldown.put(chest,mc.theWorld.getTotalWorldTime()+200L);
+            putChestCooldown(chest,200,p,true);
             status="Chest did not open after 3 vanilla right-click attempts; skipping";
             chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;
             return;
         }
         if(chestAimTicks>120&&openAttempts==0){
-            skipBlockedChest(mc.theWorld,"Could not align with a visible face of chest "+chest);
+            skipBlockedChest(mc.thePlayer,mc.theWorld,"Could not align with a visible face of chest "+chest);
             return;
         }
         if(ticks<retryTicks)return;
@@ -1915,7 +1971,7 @@ public final class GeodeClient {
         chestGuiOpenIntercepted=false;
     }
     private void finish(boolean emptied){
-        if(chest!=null&&mc.theWorld!=null)cooldown.put(chest,mc.theWorld.getTotalWorldTime()+1200L);
+        if(chest!=null&&mc.theWorld!=null)putChestCooldown(chest,1200,mc.thePlayer,false);
         resetSpecialChestRoute();
         chest=null;stage=Stage.SEEK;scanTicks=GeodeConfig.scanIntervalTicks;lootSlotCursor=0;lootEmptyTicks=0;lootTimer.reset();
         closeWindowId=-1;closeAttempts=0;chestGuiOpenIntercepted=false;
