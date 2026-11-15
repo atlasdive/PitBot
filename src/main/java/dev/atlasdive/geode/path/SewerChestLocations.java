@@ -18,7 +18,8 @@ public final class SewerChestLocations {
             {78.6D,52.0D,75.4D},
             {69.7D,58.0D,15.7D},
             {82.3D,58.0D,41.3D},
-            {67.3D,53.0D,83.3D}
+            {67.3D,53.0D,83.3D},
+            {113.0D,59.0D,26.0D}
     };
 
     private SewerChestLocations() {}
