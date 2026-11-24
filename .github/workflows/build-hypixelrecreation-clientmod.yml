@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - build/hypixelrecreation-clientmod
+  pull_request:
+    branches:
+      - build/hypixelrecreation-clientmod
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
